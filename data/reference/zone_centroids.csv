@@ -1,0 +1,37 @@
+location_id,zone_name,latitude,longitude
+1,Newark Airport,40.6895,-74.1745
+4,Alphabet City,40.7263,-73.9779
+12,Battery Park,40.7033,-74.0170
+24,Bloomingdale,40.7867,-73.9754
+41,Central Harlem,40.8116,-73.9465
+43,Central Park,40.7851,-73.9654
+45,Chinatown,40.7157,-73.9970
+48,Clinton East,40.7637,-73.9896
+68,East Chelsea,40.7461,-74.0014
+79,East Village,40.7265,-73.9815
+87,Financial District North,40.7102,-74.0116
+100,Garment District,40.7519,-73.9990
+107,Gramercy,40.7376,-73.9826
+113,Greenwich Village North,40.7339,-74.0024
+125,Highbridge Park,40.8330,-73.9290
+132,JFK Airport,40.6442,-73.7822
+138,LaGuardia Airport,40.7769,-73.8740
+140,Lenox Hill East,40.7698,-73.9601
+143,Lincoln Square East,40.7731,-73.9818
+148,Long Island City,40.7440,-73.9484
+158,Meatpacking/West Village West,40.7403,-74.0082
+161,Midtown Center,40.7549,-73.9840
+162,Midtown East,40.7552,-73.9685
+163,Midtown North,40.7614,-73.9788
+164,Midtown South,40.7483,-73.9876
+170,Murray Hill,40.7486,-73.9773
+186,Penn Station/Madison Sq West,40.7490,-73.9936
+202,Soho,40.7233,-74.0030
+224,Times Sq/Theatre District,40.7580,-73.9855
+229,TriBeCa/Civic Center,40.7163,-74.0086
+230,Two Bridges/Seward Park,40.7134,-73.9942
+234,Upper East Side North,40.7793,-73.9510
+237,Upper West Side North,40.7993,-73.9668
+238,Upper West Side South,40.7839,-73.9800
+243,Washington Heights North,40.8540,-73.9340
+249,West Village,40.7348,-74.0060
