@@ -1,0 +1,237 @@
+<mxfile host="65bd71144e">
+    <diagram id="Up16b8LHj91C7dRnY_gT" name="Page-1">
+        <mxGraphModel dx="1719" dy="1109" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=none;" parent="1" vertex="1">
+                    <mxGeometry width="1654" height="1169" as="geometry"/>
+                </mxCell>
+                <mxCell id="titlebar" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1E3A5F;strokeColor=none;arcSize=1;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="16" width="1614" height="62" as="geometry"/>
+                </mxCell>
+                <mxCell id="title" value="StreamCab — Real-Time NYC Taxi Analytics Pipeline" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=22;fontStyle=1;fontColor=#FFFFFF;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="16" width="960" height="62" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="Kafka  ·  Spark Structured Streaming  ·  XGBoost  ·  Streamlit" style="text;html=1;strokeColor=none;fillColor=none;align=right;verticalAlign=middle;fontSize=13;fontColor=#A8BFDA;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="16" width="614" height="62" as="geometry"/>
+                </mxCell>
+                <mxCell id="band1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F4FF;strokeColor=#B0BEC5;strokeWidth=1.5;arcSize=2;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="100" width="1614" height="265" as="geometry"/>
+                </mxCell>
+                <mxCell id="band1_lbl" value="INGESTION" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#546E7A;letterSpacing=2;" parent="1" vertex="1">
+                    <mxGeometry x="34" y="107" width="120" height="18" as="geometry"/>
+                </mxCell>
+                <mxCell id="band2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FAF5;strokeColor=#B0BEC5;strokeWidth=1.5;arcSize=2;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="385" width="1614" height="215" as="geometry"/>
+                </mxCell>
+                <mxCell id="band2_lbl" value="SPARK STREAMING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#546E7A;letterSpacing=2;" parent="1" vertex="1">
+                    <mxGeometry x="34" y="392" width="180" height="18" as="geometry"/>
+                </mxCell>
+                <mxCell id="band3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF0FF;strokeColor=#B0BEC5;strokeWidth=1.5;arcSize=2;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="620" width="1614" height="215" as="geometry"/>
+                </mxCell>
+                <mxCell id="band3_lbl" value="ML TRAINING &amp; INFERENCE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#546E7A;letterSpacing=2;" parent="1" vertex="1">
+                    <mxGeometry x="34" y="627" width="230" height="18" as="geometry"/>
+                </mxCell>
+                <mxCell id="band4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7F0;strokeColor=#B0BEC5;strokeWidth=1.5;arcSize=2;" parent="1" vertex="1">
+                    <mxGeometry x="20" y="855" width="1614" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="band4_lbl" value="VISUALIZATION" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#546E7A;letterSpacing=2;" parent="1" vertex="1">
+                    <mxGeometry x="34" y="862" width="150" height="18" as="geometry"/>
+                </mxCell>
+                <mxCell id="parquet" value="&lt;b style=&#39;font-size:13px;color:#1E3A5F&#39;&gt;TLC Parquet Files&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;data/raw-data/parquet/&lt;br&gt;yellow_tripdata_*.parquet&lt;br&gt;&lt;br&gt;15 years of NYC taxi data&lt;/span&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFFFFF;strokeColor=#1E3A5F;strokeWidth=2;fontColor=#212121;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="130" width="190" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="producer" value="&lt;b style=&#39;font-size:13px;color:#1E3A5F&#39;&gt;Kafka Producer&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;apps/producer/producer.py&lt;br&gt;&lt;br&gt;Replays historical trips&lt;br&gt;at controlled rate&lt;br&gt;Writes rolling live log&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#1E3A5F;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="135" width="210" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="kafka" value="&lt;b style=&#39;font-size:13px;color:#1B4332&#39;&gt;Apache Kafka&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;Topic: taxi-trips&lt;br&gt;Confluent Platform 7.6&lt;br&gt;1 partition · KRaft mode&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D6A4F;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="140" width="210" height="155" as="geometry"/>
+                </mxCell>
+                <mxCell id="cc" value="&lt;b style=&#39;font-size:13px;color:#1B4332&#39;&gt;Confluent Control Center&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;localhost:9021&lt;br&gt;&lt;br&gt;Monitor topics&lt;br&gt;Consumer lag &amp; offsets&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D6A4F;strokeWidth=1.5;fontColor=#212121;fontSize=12;arcSize=6;align=center;dashed=1;dashPattern=8 4;" parent="1" vertex="1">
+                    <mxGeometry x="1065" y="140" width="210" height="165" as="geometry"/>
+                </mxCell>
+                <mxCell id="livelog" value="&lt;b style=&#39;font-size:12px;color:#1E3A5F&#39;&gt;live_trips.json&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#37474F&#39;&gt;data/models/&lt;br&gt;Rolling last 200 events&lt;br&gt;for dashboard Tab 1&lt;/span&gt;" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=14;fillColor=#FFFFFF;strokeColor=#1E3A5F;strokeWidth=1.5;fontColor=#212121;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1390" y="148" width="210" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="spark" value="&lt;b style=&#39;font-size:13px;color:#1B4332&#39;&gt;Spark Structured Streaming&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;apps/spark/stream_processor.py&lt;br&gt;Consumer group: &lt;b&gt;streamcab-spark&lt;/b&gt;&lt;br&gt;&lt;br&gt;10-min tumbling windows per zone&lt;br&gt;Computes: trips · speed · anomalies&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D6A4F;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="408" width="300" height="168" as="geometry"/>
+                </mxCell>
+                <mxCell id="agg_parquet" value="&lt;b style=&#39;font-size:13px;color:#1B4332&#39;&gt;Window Aggregates&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;data/processed/traffic_agg/&lt;br&gt;Partitioned by service_date&lt;br&gt;&lt;br&gt;zone · window · trips&lt;br&gt;speed · duration · anomalies&lt;/span&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFFFFF;strokeColor=#2D6A4F;strokeWidth=2;fontColor=#212121;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="400" width="210" height="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="checkpoint" value="&lt;b style=&#39;font-size=11px;color:#37474F&#39;&gt;Spark Checkpoint&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#546E7A&#39;&gt;data/checkpoints/&lt;/span&gt;" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=12;fillColor=#FFFFFF;strokeColor=#90A4AE;strokeWidth=1.5;fontColor=#37474F;fontSize=11;align=center;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="1160" y="435" width="185" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="trainer" value="&lt;b style=&#39;font-size:13px;color:#3A0066&#39;&gt;XGBoost Trainer&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;apps/trainer/train_models.py&lt;br&gt;&lt;br&gt;80% train / 20% test split&lt;br&gt;Demand model (trip count)&lt;br&gt;Fare model (avg amount)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5E35B1;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="165" y="645" width="255" height="165" as="geometry"/>
+                </mxCell>
+                <mxCell id="oneshot" value="docker compose run --rm train-once" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EEF9;strokeColor=#7E57C2;strokeWidth=1;fontColor=#3A0066;fontSize=10;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="165" y="820" width="255" height="26" as="geometry"/>
+                </mxCell>
+                <mxCell id="model_file" value="&lt;b style=&#39;font-size:12px;color:#3A0066&#39;&gt;traffic_model.joblib&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#37474F&#39;&gt;data/models/&lt;br&gt;&lt;br&gt;demand_model&lt;br&gt;fare_model&lt;br&gt;feature lists + metadata&lt;/span&gt;" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=14;fillColor=#FFFFFF;strokeColor=#5E35B1;strokeWidth=2;fontColor=#212121;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="578" y="645" width="205" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="metrics_file" value="&lt;b style=&#39;font-size=11px;color:#3A0066&#39;&gt;metrics.json&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#546E7A&#39;&gt;MAE · MAPE&lt;br&gt;XGBoost vs Baseline&lt;/span&gt;" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=12;fillColor=#FFFFFF;strokeColor=#7E57C2;strokeWidth=1.5;fontColor=#37474F;fontSize=11;align=center;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="165" y="852" width="255" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="predictor" value="&lt;b style=&#39;font-size:13px;color:#3A0066&#39;&gt;Real-time Predictor&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px;color:#37474F&#39;&gt;apps/predictor/predict_realtime.py&lt;br&gt;&lt;br&gt;Every 30 seconds:&lt;br&gt;Next-window demand · fare&lt;br&gt;Tip range · Surge multiplier&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5E35B1;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="645" width="265" height="165" as="geometry"/>
+                </mxCell>
+                <mxCell id="pred_file" value="&lt;b style=&#39;font-size:12px;color:#3A0066&#39;&gt;realtime_predictions.parquet&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#37474F&#39;&gt;data/models/&lt;br&gt;&lt;br&gt;Per zone: demand · fare&lt;br&gt;tip range · surge ×&lt;/span&gt;" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=14;fillColor=#FFFFFF;strokeColor=#5E35B1;strokeWidth=1.5;fontColor=#212121;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1360" y="648" width="225" height="155" as="geometry"/>
+                </mxCell>
+                <mxCell id="dash_bar" value="Streamlit Dashboard&amp;nbsp;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1E3A5F;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="878" width="1574" height="42" as="geometry"/>
+                </mxCell>
+                <mxCell id="tab1" value="&lt;b style=&quot;font-size: 12px; color: rgb(30, 58, 95);&quot;&gt;Tab1:&amp;nbsp; Live Kafka Feed&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size: 11px; color: rgb(55, 71, 79);&quot;&gt;Last 200 trips from Kafka producer&lt;br&gt;XGBoost predicted vs actual fare&lt;br&gt;Color-coded accuracy table&lt;br&gt;Distance &amp;amp; fare charts&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#1E3A5F;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="934" width="460" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="2" value="" style="edgeStyle=none;html=1;" edge="1" parent="1" source="tab2" target="dash_bar">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="tab2" value="&lt;b style=&quot;font-size: 12px; color: rgb(27, 67, 50);&quot;&gt;Tab 2: Spark Streaming&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size: 11px; color: rgb(55, 71, 79);&quot;&gt;Trip volume area chart per window&lt;br&gt;Avg speed line chart&lt;br&gt;Busiest pickup zones table&lt;br&gt;NYC activity map (Plotly)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D6A4F;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="557" y="934" width="460" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="tab3" value="&lt;b style=&quot;font-size: 12px; color: rgb(58, 0, 102);&quot;&gt;Tab 3: Dataset Summary&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size: 11px; color: rgb(55, 71, 79);&quot;&gt;Monthly trip volume chart&lt;br&gt;Fare &amp;amp; distance distributions&lt;br&gt;Top 15 pickup zones&lt;br&gt;Summary stats table  ·  Cached 1h&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5E35B1;strokeWidth=2;fontColor=#212121;fontSize=12;arcSize=6;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1074" y="934" width="460" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="refresh_note" value="Auto-refresh every 10 s" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontColor=#90A4AE;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="1073" width="1574" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" value="reads" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;fontStyle=0;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="parquet" target="producer" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2" value="produce events" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2.5;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="producer" target="kafka" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" value="monitors" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#90A4AE;strokeWidth=1.5;fontColor=#546E7A;fontSize=10;fontStyle=2;dashed=1;dashPattern=8 5;endArrow=open;endFill=0;" parent="1" source="kafka" target="cc" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4" value="writes rolling log" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=1.5;fontColor=#37474F;fontSize=10;fontStyle=2;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;" parent="1" source="producer" target="livelog" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="615" y="222"/>
+                            <mxPoint x="615" y="115"/>
+                            <mxPoint x="1495" y="115"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5" value="consume" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2.5;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="kafka" target="spark" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6" value="writes aggregates" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="spark" target="agg_parquet" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e7" value="checkpoint" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#90A4AE;strokeWidth=1.5;fontColor=#546E7A;fontSize=10;fontStyle=2;dashed=1;dashPattern=6 4;endArrow=open;endFill=0;" parent="1" source="spark" target="checkpoint" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="700" y="492"/>
+                            <mxPoint x="1252" y="492"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e8" value="reads aggregates" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="agg_parquet" target="trainer" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="840" y="587"/>
+                            <mxPoint x="292" y="587"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e9" value="saves model" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="trainer" target="model_file" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e10" value="loads model" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="model_file" target="predictor" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e11" value="reads latest window" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="agg_parquet" target="predictor" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="945" y="612"/>
+                            <mxPoint x="1112" y="612"/>
+                            <mxPoint x="1112" y="645"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e12" value="writes predictions" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#455A64;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="predictor" target="pred_file" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e13" value="reads" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#546E7A;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;" parent="1" source="livelog" target="tab1" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1495" y="845"/>
+                            <mxPoint x="270" y="845"/>
+                            <mxPoint x="270" y="934"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e14" value="reads" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#546E7A;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="agg_parquet" target="tab2" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="945" y="845"/>
+                            <mxPoint x="787" y="845"/>
+                            <mxPoint x="787" y="934"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e15" value="reads" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#546E7A;strokeWidth=2;fontColor=#37474F;fontSize=11;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="parquet" target="tab3" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="150" y="845"/>
+                            <mxPoint x="1304" y="845"/>
+                            <mxPoint x="1304" y="934"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e16" value="inline predict" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#90A4AE;strokeWidth=1.5;fontColor=#546E7A;fontSize=10;fontStyle=2;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;" parent="1" source="model_file" target="tab1" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="578" y="845"/>
+                            <mxPoint x="270" y="845"/>
+                            <mxPoint x="270" y="934"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e17" value="surge data" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#90A4AE;strokeWidth=1.5;fontColor=#546E7A;fontSize=10;fontStyle=2;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;" parent="1" source="pred_file" target="tab2" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1360" y="845"/>
+                            <mxPoint x="787" y="845"/>
+                            <mxPoint x="787" y="934"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="l1a" value="" style="endArrow=block;endFill=1;html=1;strokeColor=#455A64;strokeWidth=2.5;" parent="1" edge="1">
+                    <mxGeometry x="1395" y="442" width="55" height="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1450" y="442"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="l2a" value="" style="endArrow=open;endFill=0;html=1;strokeColor=#90A4AE;strokeWidth=1.5;dashed=1;dashPattern=8 5;" parent="1" edge="1">
+                    <mxGeometry x="1395" y="468" width="55" height="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1450" y="468"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="l3a" value="" style="endArrow=block;endFill=1;html=1;strokeColor=#546E7A;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry x="1395" y="494" width="55" height="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1450" y="494"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="l4a" value="" style="endArrow=block;endFill=1;html=1;strokeColor=#90A4AE;strokeWidth:1.5;dashed=1;dashPattern=6 4;" parent="1" edge="1">
+                    <mxGeometry x="1395" y="520" width="55" height="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1450" y="520"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

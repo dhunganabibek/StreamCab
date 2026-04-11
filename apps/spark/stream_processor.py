@@ -58,6 +58,7 @@ def parse_stream(spark: SparkSession) -> DataFrame:
         .option("subscribe", INPUT_TOPIC)
         .option("startingOffsets", "earliest")
         .option("failOnDataLoss", "false")
+        .option("kafka.group.id", "streamcab-spark")  # visible by name in Control Center
         .load()
     )
 
@@ -136,6 +137,7 @@ def main() -> None:
         aggregated.writeStream.outputMode("update")
         .option("checkpointLocation", CHECKPOINT_DIR)
         .foreachBatch(write_batch)
+        .trigger(processingTime="2 seconds")
         .start()
     )
 
