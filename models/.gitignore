@@ -1,0 +1,7 @@
+# Generated model outputs — do not commit
+*.joblib
+*.parquet
+*_summary.json
+metrics.json
+realtime_predictions*
+live_trips.json

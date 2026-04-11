@@ -1,7 +1,6 @@
 # custom files 
-data/checkpoints
 data/raw
-data/processed
+.env
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

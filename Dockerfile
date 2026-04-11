@@ -14,6 +14,7 @@ EXPOSE 8501
 CMD ["streamlit", "run", "/opt/streamcab/apps/dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 
 FROM base AS trainer
+RUN apt-get update && apt-get install -y --no-install-recommends default-jre-headless && rm -rf /var/lib/apt/lists/*
 RUN uv pip install --system --no-cache ".[trainer]"
 COPY apps/trainer /opt/streamcab/apps/trainer
 CMD ["python", "-u", "/opt/streamcab/apps/trainer/train_models.py"]

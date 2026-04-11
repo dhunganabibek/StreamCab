@@ -1,34 +1,40 @@
-import csv
+"""
+Kafka producer — replays NYC TLC parquet files in an infinite loop,
+advancing timestamps each cycle so the data always looks "live".
+
+Also writes a rolling log of the last 200 trips to LIVE_LOG_FILE
+so the dashboard can display them in real time.
+"""
+
 import json
 import os
-import random
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from glob import glob
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
 
 import pandas as pd
+import numpy as np
 from kafka import KafkaProducer
 from kafka.errors import KafkaTimeoutError, NoBrokersAvailable
 
 
+_PROJECT_ROOT = Path(__file__).parents[2]
+
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips")
-DATA_FILE = os.getenv("DATA_FILE", "")
-DATA_DIR = os.getenv("DATA_DIR", "/opt/streamcab/data/raw")
+DATA_DIR = os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
 REPLAY_SLEEP_SECONDS = float(os.getenv("REPLAY_SLEEP_SECONDS", "0.15"))
-
-
-REQUIRED_COLUMNS = {
-    "tpep_pickup_datetime",
-    "tpep_dropoff_datetime",
-    "passenger_count",
-    "trip_distance",
-    "PULocationID",
-    "DOLocationID",
-    "total_amount",
-}
+LIVE_LOG_FILE = os.getenv(
+    "LIVE_LOG_FILE", str(_PROJECT_ROOT / "data/models/live_trips.json")
+)
+ZONE_CENTROIDS_FILE = os.getenv(
+    "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
+)
+LIVE_LOG_MAX = 200
+LIVE_LOG_FLUSH_INTERVAL = 2.0  # seconds between writes to disk
 
 SOURCE_ALIASES = {
     "pickup": ["tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"],
@@ -37,8 +43,25 @@ SOURCE_ALIASES = {
     "trip_distance": ["trip_distance"],
     "pu_location": ["PULocationID", "pu_location_id"],
     "do_location": ["DOLocationID", "do_location_id"],
+    "pickup_lat": ["pickup_latitude"],
+    "pickup_lon": ["pickup_longitude"],
+    "dropoff_lat": ["dropoff_latitude"],
+    "dropoff_lon": ["dropoff_longitude"],
     "total_amount": ["total_amount", "fare_amount"],
 }
+
+# In-memory ring buffer for the live log
+_live_buffer: deque = deque(maxlen=LIVE_LOG_MAX)
+_last_flush: float = 0.0
+_zone_ids: np.ndarray | None = None
+_zone_lats: np.ndarray | None = None
+_zone_lons: np.ndarray | None = None
+_coord_cache: dict[tuple[float, float], int] = {}
+
+
+# ---------------------------------------------------------------------------
+# Kafka connection
+# ---------------------------------------------------------------------------
 
 
 def wait_for_kafka() -> KafkaProducer:
@@ -52,208 +75,160 @@ def wait_for_kafka() -> KafkaProducer:
             )
             return producer
         except NoBrokersAvailable:
-            print("Kafka is not ready yet. Retrying in 3 seconds...")
+            print("Kafka not ready, retrying in 3 s…")
             time.sleep(3)
 
 
-def _read_csv_rows(file_path: str) -> List[Dict[str, str]]:
-    if not os.path.exists(file_path):
-        return []
-
-    with open(file_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return []
-
-        if not REQUIRED_COLUMNS.issubset(set(reader.fieldnames)):
-            missing = REQUIRED_COLUMNS.difference(set(reader.fieldnames))
-            print(f"Missing columns in CSV ({file_path}): {sorted(missing)}")
-            return []
-
-        return list(reader)
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
 
 
-def _pick_column(row: Dict[str, object], aliases: List[str], default: object = "") -> object:
+_WANTED_COLS = [c for aliases in SOURCE_ALIASES.values() for c in aliases]
+
+BATCH_SIZE = int(os.getenv("PARQUET_BATCH_SIZE", "500"))
+
+
+def _pick(row: Dict, aliases: List[str], default=None):
     for col in aliases:
         if col in row and row[col] is not None:
             return row[col]
     return default
 
 
-def _normalize_row(row: Dict[str, object]) -> Dict[str, str]:
-    pickup = _pick_column(row, SOURCE_ALIASES["pickup"])
-    dropoff = _pick_column(row, SOURCE_ALIASES["dropoff"])
-    passenger_count = _pick_column(row, SOURCE_ALIASES["passenger_count"], 1)
-    trip_distance = _pick_column(row, SOURCE_ALIASES["trip_distance"], 1.0)
-    pu_location = _pick_column(row, SOURCE_ALIASES["pu_location"], 132)
-    do_location = _pick_column(row, SOURCE_ALIASES["do_location"], 161)
-    total_amount = _pick_column(row, SOURCE_ALIASES["total_amount"], 10.0)
+def _to_float(value) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _parse_zone_id(value) -> int | None:
+    n = _to_float(value)
+    if n is None:
+        return None
+    zid = int(n)
+    return zid if zid > 0 else None
+
+
+def _load_zone_centroids() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    global _zone_ids, _zone_lats, _zone_lons
+    if _zone_ids is None or _zone_lats is None or _zone_lons is None:
+        try:
+            z = pd.read_csv(ZONE_CENTROIDS_FILE)
+            _zone_ids = z["location_id"].astype(int).to_numpy()
+            _zone_lats = z["latitude"].astype(float).to_numpy()
+            _zone_lons = z["longitude"].astype(float).to_numpy()
+        except Exception:
+            _zone_ids = np.array([161], dtype=int)
+            _zone_lats = np.array([40.7549], dtype=float)
+            _zone_lons = np.array([-73.9840], dtype=float)
+    return _zone_ids, _zone_lats, _zone_lons
+
+
+def _nearest_zone_id(lat, lon) -> int | None:
+    lat_f = _to_float(lat)
+    lon_f = _to_float(lon)
+    if lat_f is None or lon_f is None:
+        return None
+
+    key = (round(lat_f, 3), round(lon_f, 3))
+    cached = _coord_cache.get(key)
+    if cached is not None:
+        return cached
+
+    zone_ids, zone_lats, zone_lons = _load_zone_centroids()
+    # Fast nearest-by-distance (sufficient for producer normalization)
+    d2 = (zone_lats - lat_f) ** 2 + (zone_lons - lon_f) ** 2
+    idx = int(np.argmin(d2))
+    zid = int(zone_ids[idx])
+    _coord_cache[key] = zid
+    return zid
+
+
+def _normalize_row(row: Dict) -> Dict[str, str]:
+    pu_id = _parse_zone_id(_pick(row, SOURCE_ALIASES["pu_location"], None))
+    do_id = _parse_zone_id(_pick(row, SOURCE_ALIASES["do_location"], None))
+
+    if pu_id is None:
+        pu_id = _nearest_zone_id(
+            _pick(row, SOURCE_ALIASES["pickup_lat"], None),
+            _pick(row, SOURCE_ALIASES["pickup_lon"], None),
+        )
+    if do_id is None:
+        do_id = _nearest_zone_id(
+            _pick(row, SOURCE_ALIASES["dropoff_lat"], None),
+            _pick(row, SOURCE_ALIASES["dropoff_lon"], None),
+        )
+
+    if pu_id is None:
+        pu_id = 161
+    if do_id is None:
+        do_id = 161
 
     return {
-        "tpep_pickup_datetime": str(pickup),
-        "tpep_dropoff_datetime": str(dropoff),
-        "passenger_count": str(passenger_count),
-        "trip_distance": str(trip_distance),
-        "PULocationID": str(pu_location),
-        "DOLocationID": str(do_location),
-        "total_amount": str(total_amount),
+        "tpep_pickup_datetime": str(_pick(row, SOURCE_ALIASES["pickup"], "")),
+        "tpep_dropoff_datetime": str(_pick(row, SOURCE_ALIASES["dropoff"], "")),
+        "passenger_count": str(_pick(row, SOURCE_ALIASES["passenger_count"], 1)),
+        "trip_distance": str(_pick(row, SOURCE_ALIASES["trip_distance"], 1.0)),
+        "PULocationID": str(pu_id),
+        "DOLocationID": str(do_id),
+        "total_amount": str(_pick(row, SOURCE_ALIASES["total_amount"], 10.0)),
     }
 
 
-def _span_from_df(df: pd.DataFrame) -> timedelta:
-    """Compute data time span from a DataFrame using percentiles to exclude outliers."""
-    pickup_col = next((c for c in SOURCE_ALIASES["pickup"] if c in df.columns), None)
-    dropoff_col = next((c for c in SOURCE_ALIASES["dropoff"] if c in df.columns), None)
-    if not pickup_col or not dropoff_col:
-        return timedelta(days=31)
-    try:
-        pickups = pd.to_datetime(df[pickup_col], errors="coerce").dropna()
-        dropoffs = pd.to_datetime(df[dropoff_col], errors="coerce").dropna()
-        if pickups.empty or dropoffs.empty:
-            return timedelta(days=31)
-        # Use 1st/99th percentile to exclude timestamp outliers in raw taxi data
-        n_p = len(pickups)
-        n_d = len(dropoffs)
-        p_min = pickups.sort_values().iloc[int(n_p * 0.01)]
-        p_max = dropoffs.sort_values().iloc[min(n_d - 1, int(n_d * 0.99))]
-        if p_max > p_min:
-            return (p_max - p_min) + timedelta(minutes=1)
-    except Exception:
-        pass
-    return timedelta(days=31)
+def find_data_files() -> list[str]:
+    return sorted(glob(str(Path(DATA_DIR) / "*.parquet")))
 
 
-def _read_parquet_rows(file_path: str) -> Tuple[List[Dict[str, str]], timedelta]:
-    """Read parquet file and return (rows, loop_span).
+# ---------------------------------------------------------------------------
+# Streaming helpers
+# ---------------------------------------------------------------------------
 
-    Span is computed from the DataFrame before converting to string dicts —
-    this avoids re-parsing 2M+ timestamps from strings later.
+
+def stream_file_batched(path: str, time_offset: timedelta) -> Iterable[Dict[str, str]]:
+    """Read a parquet file in small batches and yield rows immediately.
+
+    Rows start flowing after the first BATCH_SIZE records are read — no need
+    to load the entire file into memory before sending.
     """
-    if not os.path.exists(file_path):
-        return [], timedelta(days=31)
+    import pyarrow.parquet as pq
 
     try:
-        df = pd.read_parquet(file_path)
-    except Exception as ex:  # noqa: BLE001
-        print(f"Failed to read parquet file {file_path}: {ex}")
-        return [], timedelta(days=31)
+        pf = pq.ParquetFile(path)
+        available = set(pf.schema_arrow.names)
+        cols = [c for c in _WANTED_COLS if c in available] or None
+    except Exception as ex:
+        print(f"Cannot open {path}: {ex}")
+        return
 
-    if df.empty:
-        return [], timedelta(days=31)
-
-    span = _span_from_df(df)
-
-    rows = [_normalize_row(record) for record in df.to_dict(orient="records")]
-    rows = [
-        r
-        for r in rows
-        if r["tpep_pickup_datetime"]
-        and r["tpep_dropoff_datetime"]
-        and r["PULocationID"]
-        and r["DOLocationID"]
-    ]
-    return rows, span
-
-
-def _span_from_rows(rows: List[Dict[str, str]]) -> timedelta:
-    """Compute span from string-dict rows (used for CSV files, usually much smaller)."""
-    try:
-        pickup_strs = [r["tpep_pickup_datetime"] for r in rows if r.get("tpep_pickup_datetime")]
-        dropoff_strs = [r["tpep_dropoff_datetime"] for r in rows if r.get("tpep_dropoff_datetime")]
-        if pickup_strs and dropoff_strs:
-            pickups = pd.to_datetime(pickup_strs, errors="coerce").dropna().tolist()
-            dropoffs = pd.to_datetime(dropoff_strs, errors="coerce").dropna().tolist()
-            pickup_datetimes = [p.to_pydatetime() for p in pickups if isinstance(p, pd.Timestamp)]
-            dropoff_datetimes = [d.to_pydatetime() for d in dropoffs if isinstance(d, pd.Timestamp)]
-            if pickup_datetimes and dropoff_datetimes:
-                pickup_min = min(pickup_datetimes)
-                dropoff_max = max(dropoff_datetimes)
-                return (dropoff_max - pickup_min) + timedelta(minutes=1)
-    except Exception:
-        pass
-    return timedelta(hours=2)
-
-
-def resolve_input_file() -> str:
-    if DATA_FILE:
-        return DATA_FILE
-
-    parquet_candidates = sorted(glob(str(Path(DATA_DIR) / "*.parquet")))
-    if parquet_candidates:
-        return parquet_candidates[0]
-
-    csv_candidates = sorted(glob(str(Path(DATA_DIR) / "*.csv")))
-    if csv_candidates:
-        return csv_candidates[0]
-
-    return ""
-
-
-def _load_input() -> Tuple[List[Dict[str, str]], timedelta]:
-    """Load all rows and compute replay span before connecting to Kafka.
-
-    Separating data loading from producer creation ensures the Kafka connection
-    is established fresh right before streaming starts, not minutes earlier.
-    """
-    input_file = resolve_input_file()
-
-    if input_file.endswith(".parquet"):
-        rows, span = _read_parquet_rows(input_file)
-    elif input_file.endswith(".csv"):
-        rows = _read_csv_rows(input_file)
-        span = _span_from_rows(rows)
-    else:
-        return [], timedelta(hours=2)
-
-    if rows:
-        print(f"Loaded {len(rows)} rows from {input_file}. Streaming in loop mode.")
-        print(f"Data time span: {span}. Timestamps will advance each loop.")
-
-    return rows, span
-
-
-def _synthetic_rows() -> Iterable[Dict[str, str]]:
-    zones = [132, 138, 161, 186, 230, 234, 237, 48, 68, 79, 113, 170, 249]
-
-    while True:
-        pickup = datetime.utcnow() - timedelta(seconds=random.randint(0, 120))
-        duration_min = random.randint(5, 35)
-        dropoff = pickup + timedelta(minutes=duration_min)
-        distance = round(random.uniform(1.2, 10.2), 2)
-
-        yield {
-            "tpep_pickup_datetime": pickup.strftime("%Y-%m-%d %H:%M:%S"),
-            "tpep_dropoff_datetime": dropoff.strftime("%Y-%m-%d %H:%M:%S"),
-            "passenger_count": str(random.randint(1, 4)),
-            "trip_distance": str(distance),
-            "PULocationID": str(random.choice(zones)),
-            "DOLocationID": str(random.choice(zones)),
-            "total_amount": str(round(distance * random.uniform(2.5, 4.2), 2)),
-        }
-
-
-def stream_rows(rows: List[Dict[str, str]], span: timedelta) -> Iterable[Dict[str, str]]:
-    """Yield rows in an infinite loop, shifting timestamps forward by span each iteration."""
-    loop_offset: timedelta = timedelta()
-
-    while True:
-        for row in rows:
-            if loop_offset:
-                r = row.copy()
+    for batch in pf.iter_batches(batch_size=BATCH_SIZE, columns=cols):
+        df = batch.to_pandas()
+        if df.empty:
+            continue
+        for r in df.to_dict(orient="records"):
+            row = _normalize_row(r)
+            if not (
+                row["tpep_pickup_datetime"]
+                and row["tpep_dropoff_datetime"]
+                and row["PULocationID"]
+                and row["DOLocationID"]
+            ):
+                continue
+            if time_offset:
                 try:
-                    pickup = pd.to_datetime(r["tpep_pickup_datetime"]) + loop_offset
-                    dropoff = pd.to_datetime(r["tpep_dropoff_datetime"]) + loop_offset
-                    r["tpep_pickup_datetime"] = pickup.strftime("%Y-%m-%d %H:%M:%S")
-                    r["tpep_dropoff_datetime"] = dropoff.strftime("%Y-%m-%d %H:%M:%S")
+                    pickup = pd.to_datetime(row["tpep_pickup_datetime"]) + time_offset
+                    dropoff = pd.to_datetime(row["tpep_dropoff_datetime"]) + time_offset
+                    row["tpep_pickup_datetime"] = pickup.strftime("%Y-%m-%d %H:%M:%S")
+                    row["tpep_dropoff_datetime"] = dropoff.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception:
-                    r = row
-                yield r
-            else:
-                yield row
-        loop_offset += span
+                    pass
+            yield row
 
 
-def to_event(row: Dict[str, str]) -> Dict[str, object]:
+def to_event(row: Dict[str, str]) -> Dict:
     return {
         "pickup_datetime": row["tpep_pickup_datetime"],
         "dropoff_datetime": row["tpep_dropoff_datetime"],
@@ -266,39 +241,116 @@ def to_event(row: Dict[str, str]) -> Dict[str, object]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Live log
+# ---------------------------------------------------------------------------
+
+
+def flush_live_log() -> None:
+    global _last_flush
+    now = time.monotonic()
+    if now - _last_flush < LIVE_LOG_FLUSH_INTERVAL:
+        return
+    if not _live_buffer:
+        return
+    path = Path(LIVE_LOG_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(list(_live_buffer), f)
+        tmp.replace(path)
+    except Exception as ex:
+        print(f"Live log write failed: {ex}")
+    _last_flush = now
+
+
+# ---------------------------------------------------------------------------
+# Synthetic fallback
+# ---------------------------------------------------------------------------
+
+
+def synthetic_rows() -> Iterable[Dict[str, str]]:
+    import random
+
+    zones = [132, 138, 161, 186, 230, 234, 237, 48, 68, 79, 113, 170, 249]
+    while True:
+        pickup = datetime.utcnow() - timedelta(seconds=random.randint(0, 120))
+        duration = random.randint(5, 35)
+        distance = round(random.uniform(1.2, 10.2), 2)
+        yield {
+            "tpep_pickup_datetime": pickup.strftime("%Y-%m-%d %H:%M:%S"),
+            "tpep_dropoff_datetime": (pickup + timedelta(minutes=duration)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "passenger_count": str(random.randint(1, 4)),
+            "trip_distance": str(distance),
+            "PULocationID": str(random.choice(zones)),
+            "DOLocationID": str(random.choice(zones)),
+            "total_amount": str(round(distance * random.uniform(2.5, 4.2), 2)),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def rotating_rows() -> Iterable[Dict[str, str]]:
+    """Yield rows from all parquet files in order, cycling forever.
+
+    Each file is read in BATCH_SIZE chunks so the first rows are sent to Kafka
+    within milliseconds of startup — no full-file pre-load required.
+    """
+    data_files = find_data_files()
+    if not data_files:
+        print(f"No parquet files found in {DATA_DIR}. Using synthetic data.")
+        yield from synthetic_rows()
+        return
+
+    print(
+        f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches."
+    )
+    # Advance timestamps by 31 days per file-cycle so replayed data always
+    # looks recent when the producer loops back to the beginning.
+    time_offset = timedelta()
+    cycle = 0
+
+    while True:
+        for path in data_files:
+            fname = Path(path).name
+            print(f"  Streaming {fname} (cycle {cycle})")
+            yield from stream_file_batched(path, time_offset)
+            time_offset += timedelta(days=31)
+        cycle += 1
+
+
 def main() -> None:
-    # Load data BEFORE connecting to Kafka so the producer connection is fresh
-    # when streaming begins, not stale after minutes of data loading.
-    rows, span = _load_input()
-
-    if rows:
-        row_iter: Iterable[Dict[str, str]] = stream_rows(rows, span)
-    else:
-        print("No valid input parquet/csv found. Falling back to synthetic rows.")
-        row_iter = _synthetic_rows()
-
     producer = wait_for_kafka()
     sent = 0
 
-    for row in row_iter:
+    for row in rotating_rows():
         try:
             event = to_event(row)
             producer.send(TOPIC, event)
+            _live_buffer.append(event)
+            flush_live_log()
             sent += 1
 
             if sent % 500 == 0:
                 producer.flush(timeout=30)
-                print(f"Sent {sent} events...")
+                print(f"Sent {sent:,} events…")
+
         except (KafkaTimeoutError, NoBrokersAvailable) as ex:
-            print(f"Kafka error, reconnecting producer... ({ex})")
+            print(f"Kafka error, reconnecting… ({ex})")
             try:
                 producer.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             producer = wait_for_kafka()
             continue
-        except Exception as ex:  # noqa: BLE001
-            print(f"Skipping one record due to error: {ex}")
+        except Exception as ex:
+            print(f"Skipping record: {ex}")
             continue
 
         time.sleep(REPLAY_SLEEP_SECONDS)
