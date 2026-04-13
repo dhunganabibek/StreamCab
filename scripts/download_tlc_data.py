@@ -1,22 +1,21 @@
 """
-Download NYC TLC yellow taxi parquet files (2015–2025).
+Download NYC TLC yellow taxi parquet files (2015-2025).
 
-Usage
------
+Usage:
 python scripts/download_tlc_data.py --output /Volumes/PNY/StreamCab
-
-Re-run at any time to resume — already-downloaded files are skipped.
 """
 
-import time
 import argparse
 import random
-from pathlib import Path
+import time
 from datetime import datetime
+from pathlib import Path
+
 import httpx
 
-
+# url to fetch traffic data
 BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
+
 
 def all_months(start, end):
     cur = start
@@ -35,7 +34,9 @@ def download(url: str, dest: Path) -> None:
 
     for attempt in range(1, 8):
         try:
-            with httpx.Client(timeout=httpx.Timeout(connect=15, read=300, write=None, pool=None)) as client:
+            with httpx.Client(
+                timeout=httpx.Timeout(connect=15, read=300, write=None, pool=None)
+            ) as client:
                 with client.stream("GET", url, follow_redirects=True) as r:
                     r.raise_for_status()
                     with tmp.open("wb") as f:
@@ -50,7 +51,11 @@ def download(url: str, dest: Path) -> None:
             if code == 404:
                 print(f"  404   {dest.name} — skipping")
                 return
-            wait = random.uniform(45, 90) * attempt if code in (403, 429) else random.uniform(2, 6) * attempt
+            wait = (
+                random.uniform(45, 90) * attempt
+                if code in (403, 429)
+                else random.uniform(2, 6) * attempt
+            )
             print(f"  HTTP {code} — retrying in {wait:.0f}s (attempt {attempt}) …")
             time.sleep(wait)
 

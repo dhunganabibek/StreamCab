@@ -1,16 +1,15 @@
 """
-Train a single XGBoost fare predictor from NYC TLC taxi data.
-
+Train a single XGBoost fare predictor from NYC  taxi data.
 Reads raw parquet files, trains on 80% of data, saves the model, and exits.
 Run once before starting the live pipeline:
 
-    docker compose run --rm train-once
+docker compose run --rm train-once
 """
 
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -23,30 +22,20 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.neighbors import BallTree
 from xgboost import XGBRegressor
 
-
 _PROJECT_ROOT = Path(__file__).parents[2]
 
 # RAW_DATA_DIR can be a local path OR an S3 URI (s3://bucket/prefix/parquet)
-RAW_DATA_DIR: str = os.getenv(
-    "RAW_DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet")
-)
-MODEL_OUTPUT_DIR = Path(
-    os.getenv("MODEL_OUTPUT_DIR", str(_PROJECT_ROOT / "models"))
-)
+RAW_DATA_DIR: str = os.getenv("RAW_DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
+MODEL_OUTPUT_DIR = Path(os.getenv("MODEL_OUTPUT_DIR", str(_PROJECT_ROOT / "models")))
 ZONE_CENTROIDS_FILE = Path(
-    os.getenv(
-        "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
-    )
+    os.getenv("ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv"))
 )
-# Set MAX_FILES to limit how many parquet files are used (useful for quick runs)
+# Set MAX_FILES to limit how many parquet files are used
 _MAX_FILES_ENV = os.getenv("MAX_FILES", "")
 MAX_FILES: int | None = int(_MAX_FILES_ENV) if _MAX_FILES_ENV.strip() else None
 
 
-# ---------------------------------------------------------------------------
 # Storage abstraction — local path, symlink, or S3 all look the same
-# ---------------------------------------------------------------------------
-
 def _build_filesystem(raw_dir: str) -> tuple[pafs.FileSystem, list[str]]:
     """Return (filesystem, sorted list of parquet paths) for local or S3 sources.
 
@@ -55,14 +44,15 @@ def _build_filesystem(raw_dir: str) -> tuple[pafs.FileSystem, list[str]]:
     """
     if raw_dir.startswith("s3://"):
         # Strip s3:// — pyarrow uses bucket/key format, not s3://bucket/key
-        s3_prefix = raw_dir[len("s3://"):]
+        s3_prefix = raw_dir[len("s3://") :]
         fs = pafs.S3FileSystem(
             region=os.getenv("AWS_REGION", "us-east-1"),
             anonymous=True,  # public bucket — no credentials needed
         )
         file_info = fs.get_file_info(pafs.FileSelector(s3_prefix, recursive=False))
         files = sorted(
-            fi.path for fi in file_info
+            fi.path
+            for fi in file_info
             if fi.type == pafs.FileType.File and fi.path.endswith(".parquet")
         )
         return fs, files
@@ -71,6 +61,7 @@ def _build_filesystem(raw_dir: str) -> tuple[pafs.FileSystem, list[str]]:
         fs = pafs.LocalFileSystem()
         files = sorted(str(f) for f in local_dir.glob("*.parquet"))
         return fs, files
+
 
 WINDOW_SIZE = pd.Timedelta(minutes=10)
 
@@ -92,10 +83,7 @@ FARE_FEATURES = [
 TARGET = "avg_total_amount"
 
 
-# ---------------------------------------------------------------------------
 # Zone centroid lookup (for pre-2017 lat/lon files)
-# ---------------------------------------------------------------------------
-
 _zone_tree: BallTree | None = None
 _zone_ids: np.ndarray | None = None
 
@@ -130,11 +118,7 @@ def _snap_to_zone(lats: pd.Series, lons: pd.Series) -> pd.Series:
     return pd.Series(result["zone_id"].values, index=lats.index, dtype="int32")
 
 
-# ---------------------------------------------------------------------------
 # Data loading + aggregation
-# ---------------------------------------------------------------------------
-
-
 def _first_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return next((c for c in candidates if c in df.columns), None)
 
@@ -157,9 +141,7 @@ def _needed_columns(file_cols: set[str]) -> list[str] | None:
     location = next((c for c in _LOCATION_CANDIDATES if c in file_cols), None)
     has_latlon = "pickup_latitude" in file_cols and "pickup_longitude" in file_cols
 
-    if not all([pickup, dropoff, distance, amount]) or (
-        not location and not has_latlon
-    ):
+    if not all([pickup, dropoff, distance, amount]) or (not location and not has_latlon):
         return None
 
     cols = [pickup, dropoff, distance, amount]  # type: ignore[list-item]
@@ -199,9 +181,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
         if c is None
     ]
     if missing or (not has_zone_id and not has_latlon):
-        print(
-            f"  SKIP {fname}: missing required columns {missing or ['location/latlon']}"
-        )
+        print(f"  SKIP {fname}: missing required columns {missing or ['location/latlon']}")
         return pd.DataFrame()
 
     # Work with Series directly to avoid copying the full DataFrame
@@ -226,9 +206,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
             return pd.DataFrame()
         # Only pass the valid lat/lon rows to BallTree — no full-DataFrame copy
         pu_location_id = pd.Series(np.nan, index=raw.index, dtype="float64")
-        pu_location_id[location_mask] = _snap_to_zone(
-            lat[location_mask], lon[location_mask]
-        ).values
+        pu_location_id[location_mask] = _snap_to_zone(lat[location_mask], lon[location_mask]).values
         del lat, lon
 
     mask = (
@@ -341,11 +319,7 @@ def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Feature engineering + training  (80 / 20 temporal split)
-# ---------------------------------------------------------------------------
-
-
 def mape(y_true: pd.Series, y_pred: pd.Series) -> float:
     denom = y_true.replace(0, 1e-6)
     return float(((y_true - y_pred).abs() / denom).mean() * 100)
@@ -353,9 +327,7 @@ def mape(y_true: pd.Series, y_pred: pd.Series) -> float:
 
 def train_and_save(df: pd.DataFrame) -> dict:
     work = df.copy()
-    work["window_start"] = pd.to_datetime(
-        work["window_start"], utc=True, errors="coerce"
-    )
+    work["window_start"] = pd.to_datetime(work["window_start"], utc=True, errors="coerce")
     work = work.dropna(subset=["window_start", TARGET]).sort_values("window_start")
     work = work.drop_duplicates(subset=["pu_location_id", "window_start"], keep="last")
 
@@ -373,9 +345,7 @@ def train_and_save(df: pd.DataFrame) -> dict:
     print(f"Training on {len(train):,} rows, testing on {len(test):,} rows...")
 
     if len(train) < 10 or len(test) < 5:
-        raise ValueError(
-            f"Not enough data: {len(train)} train rows, {len(test)} test rows."
-        )
+        raise ValueError(f"Not enough data: {len(train)} train rows, {len(test)} test rows.")
 
     # Baseline: mean fare per (zone, hour)
     baseline = train.groupby(["pu_location_id", "hour"])[TARGET].mean().reset_index()
@@ -413,16 +383,16 @@ def train_and_save(df: pd.DataFrame) -> dict:
         {
             "fare_model": model,
             "fare_features": FARE_FEATURES,
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "training_rows": int(len(train)),
+            "trained_at": datetime.now(UTC).isoformat(),
+            "training_rows": len(train),
         },
         MODEL_OUTPUT_DIR / "traffic_model.joblib",
     )
 
     metrics = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "training_rows": int(len(train)),
-        "testing_rows": int(len(test)),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "training_rows": len(train),
+        "testing_rows": len(test),
         "test_period_start": str(split_date),
         "target": TARGET,
         "baseline": {
@@ -440,11 +410,6 @@ def train_and_save(df: pd.DataFrame) -> dict:
         json.dump(metrics, f, indent=2)
 
     return metrics
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:

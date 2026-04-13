@@ -1,7 +1,6 @@
 """
-Kafka producer — replays NYC TLC parquet files in an infinite loop,
+Kafka producer — replays NYC parquet files in an infinite loop,
 advancing timestamps each cycle so the data always looks "live".
-
 Also writes a rolling log of the last 200 trips to LIVE_LOG_FILE
 so the dashboard can display them in real time.
 """
@@ -10,16 +9,15 @@ import json
 import os
 import time
 from collections import deque
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from glob import glob
 from pathlib import Path
-from typing import Dict, Iterable, List
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from kafka import KafkaProducer
 from kafka.errors import KafkaTimeoutError, NoBrokersAvailable
-
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
@@ -27,9 +25,7 @@ BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips")
 DATA_DIR = os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
 REPLAY_SLEEP_SECONDS = float(os.getenv("REPLAY_SLEEP_SECONDS", "0.15"))
-LIVE_LOG_FILE = os.getenv(
-    "LIVE_LOG_FILE", str(_PROJECT_ROOT / "data/models/live_trips.json")
-)
+LIVE_LOG_FILE = os.getenv("LIVE_LOG_FILE", str(_PROJECT_ROOT / "data/models/live_trips.json"))
 ZONE_CENTROIDS_FILE = os.getenv(
     "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
 )
@@ -59,12 +55,8 @@ _zone_lons: np.ndarray | None = None
 _coord_cache: dict[tuple[float, float], int] = {}
 
 
-# ---------------------------------------------------------------------------
-# Kafka connection
-# ---------------------------------------------------------------------------
-
-
 def wait_for_kafka() -> KafkaProducer:
+    """Kafka connection"""
     while True:
         try:
             producer = KafkaProducer(
@@ -79,9 +71,7 @@ def wait_for_kafka() -> KafkaProducer:
             time.sleep(3)
 
 
-# ---------------------------------------------------------------------------
 # Data loading
-# ---------------------------------------------------------------------------
 
 
 _WANTED_COLS = [c for aliases in SOURCE_ALIASES.values() for c in aliases]
@@ -89,7 +79,7 @@ _WANTED_COLS = [c for aliases in SOURCE_ALIASES.values() for c in aliases]
 BATCH_SIZE = int(os.getenv("PARQUET_BATCH_SIZE", "500"))
 
 
-def _pick(row: Dict, aliases: List[str], default=None):
+def _pick(row: dict, aliases: list[str], default=None):
     for col in aliases:
         if col in row and row[col] is not None:
             return row[col]
@@ -148,7 +138,7 @@ def _nearest_zone_id(lat, lon) -> int | None:
     return zid
 
 
-def _normalize_row(row: Dict) -> Dict[str, str]:
+def _normalize_row(row: dict) -> dict[str, str]:
     pu_id = _parse_zone_id(_pick(row, SOURCE_ALIASES["pu_location"], None))
     do_id = _parse_zone_id(_pick(row, SOURCE_ALIASES["do_location"], None))
 
@@ -183,12 +173,8 @@ def find_data_files() -> list[str]:
     return sorted(glob(str(Path(DATA_DIR) / "*.parquet")))
 
 
-# ---------------------------------------------------------------------------
 # Streaming helpers
-# ---------------------------------------------------------------------------
-
-
-def stream_file_batched(path: str, time_offset: timedelta) -> Iterable[Dict[str, str]]:
+def stream_file_batched(path: str, time_offset: timedelta) -> Iterable[dict[str, str]]:
     """Read a parquet file in small batches and yield rows immediately.
 
     Rows start flowing after the first BATCH_SIZE records are read — no need
@@ -228,7 +214,7 @@ def stream_file_batched(path: str, time_offset: timedelta) -> Iterable[Dict[str,
             yield row
 
 
-def to_event(row: Dict[str, str]) -> Dict:
+def to_event(row: dict[str, str]) -> dict:
     return {
         "pickup_datetime": row["tpep_pickup_datetime"],
         "dropoff_datetime": row["tpep_dropoff_datetime"],
@@ -241,11 +227,7 @@ def to_event(row: Dict[str, str]) -> Dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Live log
-# ---------------------------------------------------------------------------
-
-
 def flush_live_log() -> None:
     global _last_flush
     now = time.monotonic()
@@ -265,12 +247,8 @@ def flush_live_log() -> None:
     _last_flush = now
 
 
-# ---------------------------------------------------------------------------
 # Synthetic fallback
-# ---------------------------------------------------------------------------
-
-
-def synthetic_rows() -> Iterable[Dict[str, str]]:
+def synthetic_rows() -> Iterable[dict[str, str]]:
     import random
 
     zones = [132, 138, 161, 186, 230, 234, 237, 48, 68, 79, 113, 170, 249]
@@ -291,12 +269,7 @@ def synthetic_rows() -> Iterable[Dict[str, str]]:
         }
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
-def rotating_rows() -> Iterable[Dict[str, str]]:
+def rotating_rows() -> Iterable[dict[str, str]]:
     """Yield rows from all parquet files in order, cycling forever.
 
     Each file is read in BATCH_SIZE chunks so the first rows are sent to Kafka
@@ -308,9 +281,7 @@ def rotating_rows() -> Iterable[Dict[str, str]]:
         yield from synthetic_rows()
         return
 
-    print(
-        f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches."
-    )
+    print(f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches.")
     # Advance timestamps by 31 days per file-cycle so replayed data always
     # looks recent when the producer loops back to the beginning.
     time_offset = timedelta()

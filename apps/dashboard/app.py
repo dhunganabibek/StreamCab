@@ -1,4 +1,4 @@
-"""StreamCab — Driver Dashboard (single page, fragment-based refresh)."""
+"""StreamCab — Driver Dashboard"""
 
 import json
 import os
@@ -18,27 +18,17 @@ except Exception:
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-MODEL_FILE = Path(
-    os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib"))
-)
+MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
 ZONE_CENTROIDS_FILE = Path(
-    os.getenv(
-        "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
-    )
+    os.getenv("ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv"))
 )
-LIVE_LOG_FILE = Path(
-    os.getenv("LIVE_LOG_FILE", str(_PROJECT_ROOT / "models/live_trips.json"))
-)
+LIVE_LOG_FILE = Path(os.getenv("LIVE_LOG_FILE", str(_PROJECT_ROOT / "models/live_trips.json")))
 
 TRIP_REFRESH = 3  # seconds — left panel refreshes
 MAP_REFRESH = 15  # seconds — map refreshes
 
 
-# ---------------------------------------------------------------------------
 # Loaders  (cached to avoid re-reading disk on every fragment rerun)
-# ---------------------------------------------------------------------------
-
-
 @st.cache_resource
 def load_model():
     if not MODEL_FILE.exists():
@@ -67,11 +57,7 @@ def load_zone_centroids() -> pd.DataFrame:
     return pd.read_csv(ZONE_CENTROIDS_FILE)
 
 
-# ---------------------------------------------------------------------------
 # ML inference — run XGBoost on live Kafka trips, grouped by zone
-# ---------------------------------------------------------------------------
-
-
 @st.cache_data(ttl=TRIP_REFRESH)
 def predict_zones(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.DataFrame:
     """
@@ -87,14 +73,10 @@ def predict_zones(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.Da
 
     t = _trips.copy()
     pickup_col = (
-        t["pickup_datetime"]
-        if "pickup_datetime" in t
-        else pd.Series(pd.NaT, index=t.index)
+        t["pickup_datetime"] if "pickup_datetime" in t else pd.Series(pd.NaT, index=t.index)
     )
     dropoff_col = (
-        t["dropoff_datetime"]
-        if "dropoff_datetime" in t
-        else pd.Series(pd.NaT, index=t.index)
+        t["dropoff_datetime"] if "dropoff_datetime" in t else pd.Series(pd.NaT, index=t.index)
     )
     t["pickup_dt"] = pd.to_datetime(pickup_col, errors="coerce")
     t["dropoff_dt"] = pd.to_datetime(dropoff_col, errors="coerce")
@@ -131,9 +113,7 @@ def predict_zones(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.Da
             zone_agg[col] = 0
 
     # Model outputs a single predicted fare per zone
-    zone_agg["predicted_fare"] = (
-        fare_model.predict(zone_agg[fare_features]).clip(min=0).round(2)
-    )
+    zone_agg["predicted_fare"] = fare_model.predict(zone_agg[fare_features]).clip(min=0).round(2)
     # Single tip estimate at 18% (standard NYC rate)
     pred_fare_num = pd.to_numeric(zone_agg["predicted_fare"], errors="coerce").fillna(0)
     zone_agg["predicted_tip"] = (pred_fare_num * 0.18).round(2)
@@ -142,14 +122,11 @@ def predict_zones(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.Da
     median_trips = max(float(zone_agg["trip_count"].median()), 1.0)
     zone_agg["surge"] = (zone_agg["trip_count"] / median_trips).clip(upper=3.0).round(2)
 
-    return zone_agg.sort_values("predicted_fare", ascending=False).reset_index(
-        drop=True
-    )
+    return zone_agg.sort_values("predicted_fare", ascending=False).reset_index(drop=True)
 
 
-# ---------------------------------------------------------------------------
 # Page setup
-# ---------------------------------------------------------------------------
+
 
 st.set_page_config(page_title="StreamCab", layout="wide")
 
@@ -257,9 +234,9 @@ hr { margin: 0.35rem 0 0.45rem 0 !important; }
     unsafe_allow_html=True,
 )
 
-# ---------------------------------------------------------------------------
+
 # Static data (loaded once)
-# ---------------------------------------------------------------------------
+
 
 model_bundle = load_model()
 centroids = load_zone_centroids()
@@ -271,12 +248,8 @@ if not centroids.empty:
     zone_names = dict(
         zip(centroids["location_id"].astype(int), centroids["zone_name"], strict=False)
     )
-    zone_lat = dict(
-        zip(centroids["location_id"].astype(int), centroids["latitude"], strict=False)
-    )
-    zone_lon = dict(
-        zip(centroids["location_id"].astype(int), centroids["longitude"], strict=False)
-    )
+    zone_lat = dict(zip(centroids["location_id"].astype(int), centroids["latitude"], strict=False))
+    zone_lon = dict(zip(centroids["location_id"].astype(int), centroids["longitude"], strict=False))
 
 
 def zone_label(zone_id: int) -> str:
@@ -285,9 +258,7 @@ def zone_label(zone_id: int) -> str:
 
 
 @st.cache_data(ttl=TRIP_REFRESH)
-def predict_trip_fares(
-    _model_bundle, trips_hash: str, _trips: pd.DataFrame
-) -> pd.Series:
+def predict_trip_fares(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.Series:
     """Predict fare per trip using the trained model features."""
     if _trips.empty or _model_bundle is None:
         return pd.Series(dtype=float)
@@ -297,14 +268,10 @@ def predict_trip_fares(
 
     t = _trips.copy()
     pickup_col = (
-        t["pickup_datetime"]
-        if "pickup_datetime" in t
-        else pd.Series(pd.NaT, index=t.index)
+        t["pickup_datetime"] if "pickup_datetime" in t else pd.Series(pd.NaT, index=t.index)
     )
     dropoff_col = (
-        t["dropoff_datetime"]
-        if "dropoff_datetime" in t
-        else pd.Series(pd.NaT, index=t.index)
+        t["dropoff_datetime"] if "dropoff_datetime" in t else pd.Series(pd.NaT, index=t.index)
     )
     t["pickup_dt"] = pd.to_datetime(pickup_col, errors="coerce")
     t["dropoff_dt"] = pd.to_datetime(dropoff_col, errors="coerce")
@@ -346,10 +313,7 @@ def predict_trip_fares(
     return pd.Series(preds, index=t.index, dtype=float)
 
 
-# ---------------------------------------------------------------------------
-# Header (static — never blinks)
-# ---------------------------------------------------------------------------
-
+# Header
 model_status = "Model loaded" if model_bundle else "No model — run train-once"
 st.markdown(
     f"""
@@ -367,11 +331,8 @@ st.markdown(
 kpi_row = st.empty()  # filled by the live fragment below
 st.divider()
 
-# ---------------------------------------------------------------------------
-# LEFT FRAGMENT — trips + zone rankings, refreshes every TRIP_REFRESH seconds
-# ---------------------------------------------------------------------------
 
-
+# LEFT Portion — trips + zone rankings, refreshes every TRIP_REFRESH seconds
 @st.fragment(run_every=TRIP_REFRESH)
 def live_panel():
     live_raw = load_live_trips()
@@ -380,14 +341,10 @@ def live_panel():
     if not live_raw.empty:
         trips = live_raw.copy()
         total_amount_col = (
-            trips["total_amount"]
-            if "total_amount" in trips
-            else pd.Series(0, index=trips.index)
+            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
         )
         trip_distance_col = (
-            trips["trip_distance"]
-            if "trip_distance" in trips
-            else pd.Series(0, index=trips.index)
+            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
         )
         pu_col = (
             trips["pu_location_id"]
@@ -400,29 +357,17 @@ def live_panel():
             else pd.Series(0, index=trips.index)
         )
         emitted_col = (
-            trips["emitted_at"]
-            if "emitted_at" in trips
-            else pd.Series(pd.NaT, index=trips.index)
+            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
         )
-        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(
-            0
-        )
-        trips["trip_distance"] = pd.to_numeric(
-            trip_distance_col, errors="coerce"
-        ).fillna(0)
-        trips["pu_location_id"] = (
-            pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
-        )
-        trips["do_location_id"] = (
-            pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
-        )
+        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(0)
+        trips["trip_distance"] = pd.to_numeric(trip_distance_col, errors="coerce").fillna(0)
+        trips["pu_location_id"] = pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
+        trips["do_location_id"] = pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
         trips["emitted_at"] = pd.to_datetime(emitted_col, errors="coerce")
         trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
         trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
 
-    trips_hash = str(len(trips)) + str(
-        trips["pu_location_id"].sum() if not trips.empty else 0
-    )
+    trips_hash = str(len(trips)) + str(trips["pu_location_id"].sum() if not trips.empty else 0)
     zone_preds = predict_zones(model_bundle, trips_hash, trips)
 
     if not trips.empty and model_bundle is not None:
@@ -471,9 +416,7 @@ def live_panel():
             tip = float(row["predicted_tip"])
             speed = float(row.get("avg_speed_mph", 0))
             n_trips = int(row["trip_count"])
-            name = zone_names.get(
-                int(row["pu_location_id"]), f"Zone {int(row['pu_location_id'])}"
-            )
+            name = zone_names.get(int(row["pu_location_id"]), f"Zone {int(row['pu_location_id'])}")
             medal = medals[rank] if rank < len(medals) else str(rank + 1)
             badge = (
                 f'<span class="badge badge-red">{surge:.1f}x</span>'
@@ -505,11 +448,7 @@ def trips_panel():
     if not live_raw.empty:
         trips = live_raw.copy()
         trips["total_amount"] = pd.to_numeric(
-            (
-                trips["total_amount"]
-                if "total_amount" in trips
-                else pd.Series(0, index=trips.index)
-            ),
+            (trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)),
             errors="coerce",
         ).fillna(0)
         trips["trip_distance"] = pd.to_numeric(
@@ -557,9 +496,7 @@ def trips_panel():
 
         if model_bundle is not None:
             trips_hash = str(len(trips)) + str(trips["pu_location_id"].sum())
-            trip_pred_fares = predict_trip_fares(
-                model_bundle, trips_hash + "_tbl", trips
-            )
+            trip_pred_fares = predict_trip_fares(model_bundle, trips_hash + "_tbl", trips)
             trip_pred_num = pd.to_numeric(trip_pred_fares, errors="coerce").fillna(0)
             trips["model_tip"] = (
                 (trip_pred_num * 0.18).round(2) if not trip_pred_fares.empty else np.nan
@@ -584,9 +521,9 @@ def trips_panel():
         show["Model Tip"] = show["model_tip"].round(2)
         st.markdown('<div class="section-wrap">', unsafe_allow_html=True)
         st.dataframe(
-            show[
-                ["Time", "pickup_name", "dropoff_name", "Miles", "Fare", "Model Tip"]
-            ].rename(columns={"pickup_name": "Pickup", "dropoff_name": "Dropoff"}),
+            show[["Time", "pickup_name", "dropoff_name", "Miles", "Fare", "Model Tip"]].rename(
+                columns={"pickup_name": "Pickup", "dropoff_name": "Dropoff"}
+            ),
             use_container_width=True,
             hide_index=True,
             height=320,
@@ -595,9 +532,7 @@ def trips_panel():
                 "Pickup": st.column_config.TextColumn("Pickup"),
                 "Dropoff": st.column_config.TextColumn("Dropoff"),
                 "Miles": st.column_config.TextColumn("Miles", width="small"),
-                "Fare": st.column_config.NumberColumn(
-                    "Fare ($)", format="$%.2f", width="small"
-                ),
+                "Fare": st.column_config.NumberColumn("Fare ($)", format="$%.2f", width="small"),
                 "Model Tip": st.column_config.NumberColumn(
                     "Est Tip ($)", format="$%.2f", width="small"
                 ),
@@ -606,11 +541,7 @@ def trips_panel():
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------------------------
-# RIGHT FRAGMENT — map, refreshes every MAP_REFRESH seconds (stable zoom)
-# ---------------------------------------------------------------------------
-
-
+# RIGHT portion — map, refreshes every MAP_REFRESH seconds
 @st.fragment(run_every=MAP_REFRESH)
 def map_panel():
     live_raw = load_live_trips()
@@ -618,14 +549,10 @@ def map_panel():
     if not live_raw.empty:
         trips = live_raw.copy()
         total_amount_col = (
-            trips["total_amount"]
-            if "total_amount" in trips
-            else pd.Series(0, index=trips.index)
+            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
         )
         trip_distance_col = (
-            trips["trip_distance"]
-            if "trip_distance" in trips
-            else pd.Series(0, index=trips.index)
+            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
         )
         pu_col = (
             trips["pu_location_id"]
@@ -638,22 +565,12 @@ def map_panel():
             else pd.Series(0, index=trips.index)
         )
         emitted_col = (
-            trips["emitted_at"]
-            if "emitted_at" in trips
-            else pd.Series(pd.NaT, index=trips.index)
+            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
         )
-        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(
-            0
-        )
-        trips["trip_distance"] = pd.to_numeric(
-            trip_distance_col, errors="coerce"
-        ).fillna(0)
-        trips["pu_location_id"] = (
-            pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
-        )
-        trips["do_location_id"] = (
-            pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
-        )
+        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(0)
+        trips["trip_distance"] = pd.to_numeric(trip_distance_col, errors="coerce").fillna(0)
+        trips["pu_location_id"] = pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
+        trips["do_location_id"] = pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
         trips["emitted_at"] = pd.to_datetime(emitted_col, errors="coerce")
 
     st.markdown("### City Map — All Stations & Most Popular")
@@ -662,9 +579,7 @@ def map_panel():
         st.info("No station coordinates found — check zone_centroids.csv.")
         return
 
-    station_base = centroids[
-        ["location_id", "zone_name", "latitude", "longitude"]
-    ].copy()
+    station_base = centroids[["location_id", "zone_name", "latitude", "longitude"]].copy()
     station_base["location_id"] = station_base["location_id"].astype(int)
 
     if trips.empty:
@@ -686,21 +601,13 @@ def map_panel():
         )
         station_base = station_base.merge(pickup_counts, on="location_id", how="left")
         station_base = station_base.merge(dropoff_counts, on="location_id", how="left")
-        station_base["pickup_trips"] = (
-            station_base["pickup_trips"].fillna(0).astype(int)
-        )
-        station_base["dropoff_trips"] = (
-            station_base["dropoff_trips"].fillna(0).astype(int)
-        )
-        station_base["total_trips"] = (
-            station_base["pickup_trips"] + station_base["dropoff_trips"]
-        )
+        station_base["pickup_trips"] = station_base["pickup_trips"].fillna(0).astype(int)
+        station_base["dropoff_trips"] = station_base["dropoff_trips"].fillna(0).astype(int)
+        station_base["total_trips"] = station_base["pickup_trips"] + station_base["dropoff_trips"]
 
     popular = station_base.sort_values("total_trips", ascending=False).head(12).copy()
     top_total = max(int(popular["total_trips"].max()), 1)
-    popular["size"] = popular["total_trips"].apply(
-        lambda v: 12 + (float(v) / top_total * 20)
-    )
+    popular["size"] = popular["total_trips"].apply(lambda v: 12 + (float(v) / top_total * 20))
     station_hover = station_base.apply(
         lambda r: (
             f"{r['zone_name']}<br>Pickup: {int(r['pickup_trips'])}"
@@ -808,10 +715,7 @@ def map_panel():
         )
 
 
-# ---------------------------------------------------------------------------
 # Render fragments
-# ---------------------------------------------------------------------------
-
 live_panel()
 
 col_left, col_right = st.columns([1, 1.35], gap="large")
