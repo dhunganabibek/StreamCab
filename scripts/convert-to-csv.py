@@ -1,5 +1,4 @@
 """Convert TLC parquet files to CSV.
-
 Usage:
     python scripts/convert-to-csv.py --input data/raw-data/parquet --output data/raw-data/csv
 """
@@ -44,7 +43,10 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Directory to write .csv files")
     args = parser.parse_args()
 
-    convert(Path(args.input).expanduser().resolve(), Path(args.output).expanduser().resolve())
+    convert(
+        Path(args.input).expanduser().resolve(),
+        Path(args.output).expanduser().resolve(),
+    )
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ From raw historical parquet data to a live Kafka + Spark pipeline with XGBoost f
 
 .env file is not copied committed to Github for security reason. Create you own .env file. See .env.example for reference.
 
-### Step 1 — Download TLC data (one-time)
+### Step 1 — Download TLC data
 
 ---
 
@@ -67,7 +67,7 @@ Then open **[http://localhost:8501](http://localhost:8501)** for the dashboard.
 
 | Path                                       | Contents                                  |
 | ------------------------------------------ | ----------------------------------------- |
-| `data/raw-data/parquet/`                   | Raw TLC yellow taxi parquet files         |
+| `data/raw-data/parquet/`                   | Raw yellow taxi parquet files             |
 | `data/models/traffic_model.joblib`         | Trained XGBoost model                     |
 | `data/models/metrics.json`                 | Training metrics                          |
 | `data/models/live_trips.json`              | Rolling log of last 200 Kafka trips       |

@@ -5,12 +5,14 @@ from pyspark.sql.functions import (
     avg,
     col,
     from_json,
-    sum as spark_sum,
     to_date,
     to_timestamp,
     unix_timestamp,
     when,
     window,
+)
+from pyspark.sql.functions import (
+    sum as spark_sum,
 )
 from pyspark.sql.types import (
     DoubleType,
@@ -19,7 +21,6 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "taxi-trips")

@@ -1,12 +1,7 @@
 """
-Real-time inference loop.
-
 Every PREDICTION_INTERVAL_SECONDS:
-  1. Load the latest Spark aggregates.
-  2. Run the XGBoost fare predictor per pickup zone.
-  3. Compute surge multiplier = zone trips / median zone trips (clamped 1.0–3.0).
-  4. Estimate tip range as 15–20% of predicted fare.
-  5. Write results to PREDICTIONS_FILE for the dashboard.
+Load the latest Spark aggregates then Run the XGBoost fare predictor per pickup zone.
+estimate prediction and write it to file
 """
 
 import json
@@ -19,15 +14,10 @@ from typing import cast
 import joblib
 import pandas as pd
 
-
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-AGGREGATE_DIR = Path(
-    os.getenv("AGGREGATE_DIR", str(_PROJECT_ROOT / "data/processed/traffic_agg"))
-)
-MODEL_FILE = Path(
-    os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "data/models/traffic_model.joblib"))
-)
+AGGREGATE_DIR = Path(os.getenv("AGGREGATE_DIR", str(_PROJECT_ROOT / "data/processed/traffic_agg")))
+MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "data/models/traffic_model.joblib")))
 PREDICTIONS_FILE = Path(
     os.getenv(
         "PREDICTIONS_FILE",
@@ -86,18 +76,14 @@ def run_prediction_cycle() -> None:
             rows[col] = 0
 
     # Fare prediction
-    rows["predicted_avg_fare"] = (
-        fare_model.predict(rows[fare_features]).clip(min=0).round(2)
-    )
+    rows["predicted_avg_fare"] = fare_model.predict(rows[fare_features]).clip(min=0).round(2)
 
-    # Tip estimates: 15–20% of predicted fare
+    # Tip estimates: 15-20% of predicted fare based from model
     rows["predicted_tip_low"] = (rows["predicted_avg_fare"] * 0.15).round(2)
     rows["predicted_tip_high"] = (rows["predicted_avg_fare"] * 0.20).round(2)
 
     # Surge multiplier: zone trip count vs median across all zones
-    median_trips = (
-        float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
-    )
+    median_trips = float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
     if median_trips > 0 and "trip_count" in rows.columns:
         rows["surge_multiplier"] = (
             (rows["trip_count"] / median_trips).clip(lower=1.0, upper=3.0).round(2)
@@ -135,14 +121,12 @@ def run_prediction_cycle() -> None:
 
     summary = {
         "generated_at": pd.Timestamp.utcnow().isoformat(),
-        "zones": int(len(output)),
+        "zones": len(output),
         "top_zone": int(output.iloc[0]["pu_location_id"]) if not output.empty else None,
         "top_predicted_fare": (
             float(output.iloc[0]["predicted_avg_fare"]) if not output.empty else None
         ),
-        "max_surge": (
-            float(output["surge_multiplier"].max()) if not output.empty else None
-        ),
+        "max_surge": (float(output["surge_multiplier"].max()) if not output.empty else None),
     }
 
     with (PREDICTIONS_FILE.parent / "realtime_predictions_summary.json").open(
