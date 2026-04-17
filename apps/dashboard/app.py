@@ -1,6 +1,5 @@
 """StreamCab — Driver Dashboard"""
 
-import json
 import os
 from importlib import import_module
 from pathlib import Path
@@ -9,6 +8,8 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import psycopg
+import psycopg.rows
 import streamlit as st
 
 try:
@@ -18,14 +19,15 @@ except Exception:
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
 MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
 ZONE_CENTROIDS_FILE = Path(
     os.getenv("ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv"))
 )
-LIVE_LOG_FILE = Path(os.getenv("LIVE_LOG_FILE", str(_PROJECT_ROOT / "models/live_trips.json")))
 
 TRIP_REFRESH = 3  # seconds — left panel refreshes
 MAP_REFRESH = 15  # seconds — map refreshes
+LIVE_SAMPLE_LIMIT = int(os.getenv("LIVE_SAMPLE_LIMIT", "200"))
 
 
 # Loaders  (cached to avoid re-reading disk on every fragment rerun)
@@ -41,11 +43,73 @@ def load_model():
 
 @st.cache_data(ttl=TRIP_REFRESH)
 def load_live_trips() -> pd.DataFrame:
-    if not LIVE_LOG_FILE.exists():
-        return pd.DataFrame()
     try:
-        data = json.loads(LIVE_LOG_FILE.read_text(encoding="utf-8"))
-        return pd.DataFrame(data) if data else pd.DataFrame()
+        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT pickup_datetime, dropoff_datetime, passenger_count,
+                           trip_distance, pu_location_id, do_location_id,
+                           total_amount, emitted_at
+                    FROM live_trips
+                    ORDER BY emitted_at DESC
+                    LIMIT %s
+                """,
+                    (LIVE_SAMPLE_LIMIT,),
+                )
+                rows = cur.fetchall()
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=TRIP_REFRESH)
+def load_trips_per_minute() -> int:
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS trip_count
+                    FROM live_trips
+                    WHERE emitted_at >= NOW() - INTERVAL '60 seconds'
+                    """
+                )
+                row = cur.fetchone()
+        if not row:
+            return 0
+        return int(row["trip_count"] or 0)
+    except Exception:
+        return 0
+
+
+@st.cache_data(ttl=MAP_REFRESH)
+def load_predictions() -> pd.DataFrame:
+    """Latest prediction per zone, written by the predictor service."""
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (pu_location_id)
+                        pu_location_id,
+                        trip_count,
+                        avg_speed_mph,
+                        avg_trip_distance,
+                        predicted_avg_fare  AS predicted_fare,
+                        predicted_tip_low,
+                        predicted_tip_high,
+                        surge_multiplier    AS surge
+                    FROM predictions
+                    ORDER BY pu_location_id, prediction_generated_at DESC
+                """
+                )
+                rows = cur.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["predicted_tip"] = ((df["predicted_tip_low"] + df["predicted_tip_high"]) / 2).round(2)
+        return df.sort_values("predicted_fare", ascending=False).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
@@ -55,74 +119,6 @@ def load_zone_centroids() -> pd.DataFrame:
     if not ZONE_CENTROIDS_FILE.exists():
         return pd.DataFrame()
     return pd.read_csv(ZONE_CENTROIDS_FILE)
-
-
-# ML inference — run XGBoost on live Kafka trips, grouped by zone
-@st.cache_data(ttl=TRIP_REFRESH)
-def predict_zones(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate live trips to zone level, run XGBoost, return one row per zone.
-    `trips_hash` is a cache-busting key; `_trips` is prefixed with _ so
-    Streamlit doesn't try to hash the DataFrame itself.
-    """
-    if _trips.empty or _model_bundle is None:
-        return pd.DataFrame()
-
-    fare_model = _model_bundle["fare_model"]
-    fare_features = _model_bundle["fare_features"]
-
-    t = _trips.copy()
-    pickup_col = (
-        t["pickup_datetime"] if "pickup_datetime" in t else pd.Series(pd.NaT, index=t.index)
-    )
-    dropoff_col = (
-        t["dropoff_datetime"] if "dropoff_datetime" in t else pd.Series(pd.NaT, index=t.index)
-    )
-    t["pickup_dt"] = pd.to_datetime(pickup_col, errors="coerce")
-    t["dropoff_dt"] = pd.to_datetime(dropoff_col, errors="coerce")
-    t["duration_min"] = (
-        ((t["dropoff_dt"] - t["pickup_dt"]).dt.total_seconds() / 60)
-        .clip(lower=1, upper=180)
-        .fillna(10)
-    )
-    t["speed_mph"] = (
-        (t["trip_distance"] / (t["duration_min"] / 60).replace(0, np.nan))
-        .clip(lower=1, upper=80)
-        .fillna(15)
-    )
-    t["hour"] = t["pickup_dt"].dt.hour.fillna(12).astype(int)
-    t["day_of_week"] = t["pickup_dt"].dt.dayofweek.fillna(0).astype(int)
-    t["is_weekend"] = (t["day_of_week"] >= 5).astype(int)
-
-    zone_agg = (
-        t.groupby("pu_location_id")
-        .agg(
-            avg_trip_distance=("trip_distance", "mean"),
-            avg_duration_min=("duration_min", "mean"),
-            avg_speed_mph=("speed_mph", "mean"),
-            trip_count=("pu_location_id", "count"),
-            hour=("hour", lambda x: int(x.mode().iloc[0])),
-            day_of_week=("day_of_week", lambda x: int(x.mode().iloc[0])),
-            is_weekend=("is_weekend", "first"),
-        )
-        .reset_index()
-    )
-
-    for col in fare_features:
-        if col not in zone_agg.columns:
-            zone_agg[col] = 0
-
-    # Model outputs a single predicted fare per zone
-    zone_agg["predicted_fare"] = fare_model.predict(zone_agg[fare_features]).clip(min=0).round(2)
-    # Single tip estimate at 18% (standard NYC rate)
-    pred_fare_num = pd.to_numeric(zone_agg["predicted_fare"], errors="coerce").fillna(0)
-    zone_agg["predicted_tip"] = (pred_fare_num * 0.18).round(2)
-
-    # Surge: zone trip count vs median
-    median_trips = max(float(zone_agg["trip_count"].median()), 1.0)
-    zone_agg["surge"] = (zone_agg["trip_count"] / median_trips).clip(upper=3.0).round(2)
-
-    return zone_agg.sort_values("predicted_fare", ascending=False).reset_index(drop=True)
 
 
 # Page setup
@@ -336,6 +332,7 @@ st.divider()
 @st.fragment(run_every=TRIP_REFRESH)
 def live_panel():
     live_raw = load_live_trips()
+    trips_per_min = load_trips_per_minute()
 
     trips = pd.DataFrame()
     if not live_raw.empty:
@@ -367,26 +364,15 @@ def live_panel():
         trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
         trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
 
-    trips_hash = str(len(trips)) + str(trips["pu_location_id"].sum() if not trips.empty else 0)
-    zone_preds = predict_zones(model_bundle, trips_hash, trips)
-
-    if not trips.empty and model_bundle is not None:
-        trip_pred_fares = predict_trip_fares(model_bundle, trips_hash + "_trip", trips)
-        trip_pred_num = pd.to_numeric(trip_pred_fares, errors="coerce").fillna(0)
-        trips["model_tip"] = (
-            (trip_pred_num * 0.18).round(2) if not trip_pred_fares.empty else np.nan
-        )
-    elif not trips.empty:
-        trips["model_tip"] = np.nan
+    # Zone predictions come from the predictor service via Postgres
+    zone_preds = load_predictions()
 
     with kpi_row.container():
         k1, k2, k3, k4, k5 = st.columns(5)
         if not trips.empty:
-            cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta("60s")
-            recent = trips[trips["emitted_at"] >= cutoff]
             top_zid = int(trips["pu_location_id"].mode().iloc[0])
             n = len(trips)
-            k1.metric("Trips / min", str(len(recent)), help="Last 60 s")
+            k1.metric("Trips / min", str(trips_per_min), help="Last 60 s")
             k2.metric(f"Avg Fare ({n})", f"${trips['total_amount'].mean():.2f}")
             k3.metric(f"Avg Miles ({n})", f"{trips['trip_distance'].mean():.1f} mi")
             k4.metric("Hottest Zone", zone_names.get(top_zid, f"Zone {top_zid}"))
@@ -403,10 +389,10 @@ def live_panel():
             k5.metric("Max Surge", "—")
 
     st.markdown('<div class="section-title">Pickup Zones</div>', unsafe_allow_html=True)
-    if model_bundle is None:
-        st.warning("Run `docker compose run --rm train-once` to load the model.")
-    elif zone_preds.empty:
-        st.info("Waiting for Kafka trips…")
+    if zone_preds.empty:
+        st.info(
+            "Waiting for predictor — run `docker compose run --rm train-once` first if model is missing."
+        )
     else:
         medals = ["1", "2", "3", "4", "5", "6"]
         html = '<div class="zone-grid">'
@@ -628,6 +614,7 @@ def map_panel():
     fig_map.add_trace(
         go.Scattermapbox(
             mode="markers",
+            uid="all-stations",
             lon=station_base["longitude"],
             lat=station_base["latitude"],
             marker={"size": 8, "color": "#64748b"},
@@ -641,6 +628,7 @@ def map_panel():
     fig_map.add_trace(
         go.Scattermapbox(
             mode="markers+text",
+            uid="popular-stations",
             lon=popular["longitude"],
             lat=popular["latitude"],
             marker={
@@ -669,6 +657,7 @@ def map_panel():
             fig_map.add_trace(
                 go.Scattermapbox(
                     mode="markers",
+                    uid="user-location",
                     lon=[float(geo["longitude"])],
                     lat=[float(geo["latitude"])],
                     marker={"size": 15, "color": "#3b82f6"},
@@ -679,16 +668,16 @@ def map_panel():
             )
 
     fig_map.update_layout(
+        uirevision="city-map-lock",
         mapbox={
             "style": "carto-positron",
             "zoom": 10,
             "center": {"lat": 40.75, "lon": -73.98},
+            "uirevision": "city-map-lock",
         },
         margin={"t": 0, "b": 0},
         height=310,
         legend={"orientation": "h", "y": 1.02, "x": 0},
-        uirevision="stations-popularity-v3",
-        mapbox_uirevision="keep-map-view",
     )
     st.plotly_chart(fig_map, use_container_width=True, key="city_map_chart")
 

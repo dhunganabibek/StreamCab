@@ -23,9 +23,12 @@ from pyspark.sql.types import (
 )
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
-INPUT_TOPIC = os.getenv("INPUT_TOPIC", "taxi-trips")
-CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "/opt/streamcab/data/checkpoints/traffic_agg")
-OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/opt/streamcab/data/processed/traffic_agg")
+INPUT_TOPIC = os.getenv("KAFKA_TOPIC", os.getenv("INPUT_TOPIC", "taxi-trips"))
+
+POSTGRES_JDBC_URL = os.getenv("POSTGRES_JDBC_URL", "jdbc:postgresql://postgres:5432/streamcab")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "streamcab")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "streamcab")
+POSTGRES_TABLE = "traffic_agg"
 
 
 def build_session() -> SparkSession:
@@ -59,7 +62,7 @@ def parse_stream(spark: SparkSession) -> DataFrame:
         .option("subscribe", INPUT_TOPIC)
         .option("startingOffsets", "earliest")
         .option("failOnDataLoss", "false")
-        .option("kafka.group.id", "streamcab-spark")  # visible by name in Control Center
+        .option("kafka.group.id", "streamcab-spark")
         .load()
     )
 
@@ -125,7 +128,16 @@ def write_batch(batch_df: DataFrame, _: int) -> None:
     if batch_df.isEmpty():
         return
 
-    (batch_df.coalesce(1).write.mode("append").partitionBy("service_date").parquet(OUTPUT_DIR))
+    (
+        batch_df.write.format("jdbc")
+        .option("url", POSTGRES_JDBC_URL)
+        .option("dbtable", POSTGRES_TABLE)
+        .option("user", POSTGRES_USER)
+        .option("password", POSTGRES_PASSWORD)
+        .option("driver", "org.postgresql.Driver")
+        .mode("append")
+        .save()
+    )
 
 
 def main() -> None:
@@ -136,7 +148,6 @@ def main() -> None:
 
     query = (
         aggregated.writeStream.outputMode("update")
-        .option("checkpointLocation", CHECKPOINT_DIR)
         .foreachBatch(write_batch)
         .trigger(processingTime="2 seconds")
         .start()

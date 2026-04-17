@@ -1,10 +1,10 @@
 """
 Every PREDICTION_INTERVAL_SECONDS:
-Load the latest Spark aggregates then Run the XGBoost fare predictor per pickup zone.
-estimate prediction and write it to file
+  - Load latest Spark aggregates from Postgres
+  - Run XGBoost fare predictor per pickup zone
+  - Write predictions back to Postgres
 """
 
-import json
 import os
 import time
 from datetime import timedelta
@@ -13,35 +13,101 @@ from typing import cast
 
 import joblib
 import pandas as pd
+import psycopg
+import psycopg.rows
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-AGGREGATE_DIR = Path(os.getenv("AGGREGATE_DIR", str(_PROJECT_ROOT / "data/processed/traffic_agg")))
-MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "data/models/traffic_model.joblib")))
-PREDICTIONS_FILE = Path(
-    os.getenv(
-        "PREDICTIONS_FILE",
-        str(_PROJECT_ROOT / "data/models/realtime_predictions.parquet"),
-    )
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab"
+)
+MODEL_FILE = Path(
+    os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib"))
 )
 PREDICTION_INTERVAL_SECONDS = int(os.getenv("PREDICTION_INTERVAL_SECONDS", "30"))
 
 
+def wait_for_db() -> None:
+    while True:
+        try:
+            with psycopg.connect(DATABASE_URL):
+                pass
+            print("Postgres ready.")
+            return
+        except Exception:
+            print("Postgres not ready, retrying in 3 s…")
+            time.sleep(3)
+
+
 def load_aggregates() -> pd.DataFrame:
-    if not AGGREGATE_DIR.exists() or not list(AGGREGATE_DIR.rglob("*.parquet")):
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT window_start, window_end, pu_location_id, trip_count,
+                           avg_speed_mph, avg_duration_min, avg_trip_distance,
+                           avg_total_amount, anomaly_count
+                    FROM traffic_agg
+                    ORDER BY window_start
+                """
+                )
+                rows = cur.fetchall()
+    except Exception as ex:
+        print(f"Failed to load aggregates: {ex}")
         return pd.DataFrame()
 
-    df = pd.read_parquet(AGGREGATE_DIR)
-    if df.empty:
-        return df
+    if not rows:
+        return pd.DataFrame()
 
+    df = pd.DataFrame(rows)
     df["window_start"] = pd.to_datetime(df["window_start"], utc=True, errors="coerce")
     df["window_end"] = pd.to_datetime(df["window_end"], utc=True, errors="coerce")
     df = df.dropna(subset=["window_start", "window_end"]).sort_values("window_start")
-
-    # Deduplicate: keep last row per (zone, window) from append-mode parquet
+    # Deduplicate: keep last row per (zone, window) from Spark append mode
     df = df.drop_duplicates(subset=["pu_location_id", "window_start"], keep="last")
     return df
+
+
+def write_predictions(output: pd.DataFrame) -> None:
+    records = [
+        (
+            int(r.pu_location_id),
+            r.window_start.to_pydatetime(),
+            r.window_end.to_pydatetime(),
+            int(r.trip_count) if pd.notna(r.trip_count) else 0,
+            float(r.avg_speed_mph) if pd.notna(r.avg_speed_mph) else 0.0,
+            float(r.avg_trip_distance) if pd.notna(r.avg_trip_distance) else 0.0,
+            float(r.predicted_avg_fare),
+            float(r.predicted_tip_low),
+            float(r.predicted_tip_high),
+            float(r.surge_multiplier),
+            r.prediction_for_window_start.to_pydatetime(),
+            r.prediction_for_window_end.to_pydatetime(),
+            r.prediction_generated_at.to_pydatetime(),
+        )
+        for r in output.itertuples()
+    ]
+
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM predictions")
+                cur.executemany(
+                    """
+                    INSERT INTO predictions (
+                        pu_location_id, window_start, window_end, trip_count,
+                        avg_speed_mph, avg_trip_distance, predicted_avg_fare,
+                        predicted_tip_low, predicted_tip_high, surge_multiplier,
+                        prediction_for_window_start, prediction_for_window_end,
+                        prediction_generated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    records,
+                )
+            conn.commit()
+    except Exception as ex:
+        print(f"Failed to write predictions: {ex}")
 
 
 def run_prediction_cycle() -> None:
@@ -70,20 +136,19 @@ def run_prediction_cycle() -> None:
     rows["day_of_week"] = rows["window_start"].dt.dayofweek
     rows["is_weekend"] = (rows["day_of_week"] >= 5).astype(int)
 
-    # Fill any missing feature columns with zone medians
     for col in fare_features:
         if col not in rows.columns:
             rows[col] = 0
 
-    # Fare prediction
-    rows["predicted_avg_fare"] = fare_model.predict(rows[fare_features]).clip(min=0).round(2)
-
-    # Tip estimates: 15-20% of predicted fare based from model
+    rows["predicted_avg_fare"] = (
+        fare_model.predict(rows[fare_features]).clip(min=0).round(2)
+    )
     rows["predicted_tip_low"] = (rows["predicted_avg_fare"] * 0.15).round(2)
     rows["predicted_tip_high"] = (rows["predicted_avg_fare"] * 0.20).round(2)
 
-    # Surge multiplier: zone trip count vs median across all zones
-    median_trips = float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
+    median_trips = (
+        float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
+    )
     if median_trips > 0 and "trip_count" in rows.columns:
         rows["surge_multiplier"] = (
             (rows["trip_count"] / median_trips).clip(lower=1.0, upper=3.0).round(2)
@@ -91,7 +156,6 @@ def run_prediction_cycle() -> None:
     else:
         rows["surge_multiplier"] = 1.0
 
-    # Next-window labels
     rows["prediction_generated_at"] = pd.Timestamp.utcnow()
     rows["prediction_for_window_start"] = rows["window_end"]
     rows["prediction_for_window_end"] = rows["window_end"] + timedelta(minutes=10)
@@ -116,33 +180,17 @@ def run_prediction_cycle() -> None:
         by="predicted_avg_fare", ascending=False
     )
 
-    PREDICTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    output.to_parquet(PREDICTIONS_FILE, index=False)
-
-    summary = {
-        "generated_at": pd.Timestamp.utcnow().isoformat(),
-        "zones": len(output),
-        "top_zone": int(output.iloc[0]["pu_location_id"]) if not output.empty else None,
-        "top_predicted_fare": (
-            float(output.iloc[0]["predicted_avg_fare"]) if not output.empty else None
-        ),
-        "max_surge": (float(output["surge_multiplier"].max()) if not output.empty else None),
-    }
-
-    with (PREDICTIONS_FILE.parent / "realtime_predictions_summary.json").open(
-        "w", encoding="utf-8"
-    ) as f:
-        json.dump(summary, f, indent=2)
-
+    write_predictions(output)
     print(
         f"Predictions written: {len(output)} zones | "
-        f"max fare ${summary['top_predicted_fare']:.2f} | "
-        f"max surge {summary['max_surge']:.2f}x"
+        f"max fare ${output['predicted_avg_fare'].max():.2f} | "
+        f"max surge {output['surge_multiplier'].max():.2f}x"
     )
 
 
 def main() -> None:
     print("StreamCab — Realtime Predictor running.")
+    wait_for_db()
     while True:
         try:
             run_prediction_cycle()

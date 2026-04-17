@@ -24,7 +24,6 @@ from xgboost import XGBRegressor
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-# RAW_DATA_DIR can be a local path OR an S3 URI (s3://bucket/prefix/parquet)
 RAW_DATA_DIR: str = os.getenv("RAW_DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
 MODEL_OUTPUT_DIR = Path(os.getenv("MODEL_OUTPUT_DIR", str(_PROJECT_ROOT / "models")))
 ZONE_CENTROIDS_FILE = Path(
@@ -37,13 +36,8 @@ MAX_FILES: int | None = int(_MAX_FILES_ENV) if _MAX_FILES_ENV.strip() else None
 
 # Storage abstraction — local path, symlink, or S3 all look the same
 def _build_filesystem(raw_dir: str) -> tuple[pafs.FileSystem, list[str]]:
-    """Return (filesystem, sorted list of parquet paths) for local or S3 sources.
-
-    Local/symlink: raw_dir is an absolute or relative file path.
-    S3:            raw_dir starts with s3://  e.g. s3://my-bucket/streamcab/parquet
-    """
+    """Return (filesystem, sorted list of parquet paths) for local or S3 sources."""
     if raw_dir.startswith("s3://"):
-        # Strip s3:// — pyarrow uses bucket/key format, not s3://bucket/key
         s3_prefix = raw_dir[len("s3://") :]
         fs = pafs.S3FileSystem(
             region=os.getenv("AWS_REGION", "us-east-1"),
@@ -155,9 +149,8 @@ def _needed_columns(file_cols: set[str]) -> list[str] | None:
 def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
     """Clean one file's rows and aggregate to 10-min window stats per zone.
 
-    Handles two TLC schemas:
-      - Pre-2017: pickup_longitude / pickup_latitude  (no zone ID)
-      - 2017+   : PULocationID                        (zone ID present)
+    - Pre-2017: pickup_longitude / pickup_latitude  (no zone ID)
+    - 2017+   : PULocationID                        (zone ID present)
     """
     pickup_col = _first_col(raw, _PICKUP_CANDIDATES)
     dropoff_col = _first_col(raw, _DROPOFF_CANDIDATES)
@@ -271,12 +264,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
 
 
 def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
-    """Read raw TLC parquets and compute 10-minute window aggregates per zone.
-
-    raw_dir can be a local path, a symlink target, or an S3 URI
-    (s3://bucket/prefix). Each file is aggregated immediately and raw rows
-    are discarded, so memory usage stays proportional to a single file.
-    """
+    """Read raw TLC parquets and compute 10-minute window aggregates per zone."""
     fs, all_files = _build_filesystem(raw_dir)
     if not all_files:
         print(f"No parquet files found in {raw_dir}")

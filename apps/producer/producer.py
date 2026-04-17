@@ -1,14 +1,11 @@
 """
 Kafka producer — replays NYC parquet files in an infinite loop,
 advancing timestamps each cycle so the data always looks "live".
-Also writes a rolling log of the last 200 trips to LIVE_LOG_FILE
-so the dashboard can display them in real time.
+By default it only publishes to Kafka.
 """
 
-import json
 import os
 import time
-from collections import deque
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from glob import glob
@@ -16,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psycopg
 from kafka import KafkaProducer
 from kafka.errors import KafkaTimeoutError, NoBrokersAvailable
 
@@ -25,12 +23,18 @@ BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips")
 DATA_DIR = os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
 REPLAY_SLEEP_SECONDS = float(os.getenv("REPLAY_SLEEP_SECONDS", "0.15"))
-LIVE_LOG_FILE = os.getenv("LIVE_LOG_FILE", str(_PROJECT_ROOT / "data/models/live_trips.json"))
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab"
+)
 ZONE_CENTROIDS_FILE = os.getenv(
     "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
 )
+
 LIVE_LOG_MAX = 200
-LIVE_LOG_FLUSH_INTERVAL = 2.0  # seconds between writes to disk
+LIVE_LOG_FLUSH_INTERVAL = 2.0  # seconds between DB flushes
+WRITE_LIVE_TRIPS_FROM_PRODUCER = os.getenv(
+    "WRITE_LIVE_TRIPS_FROM_PRODUCER", "false"
+).lower() in {"1", "true", "yes", "on"}
 
 SOURCE_ALIASES = {
     "pickup": ["tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"],
@@ -46,8 +50,8 @@ SOURCE_ALIASES = {
     "total_amount": ["total_amount", "fare_amount"],
 }
 
-# In-memory ring buffer for the live log
-_live_buffer: deque = deque(maxlen=LIVE_LOG_MAX)
+# In-memory queue for optional direct DB writes from producer
+_live_buffer: list[dict] = []
 _last_flush: float = 0.0
 _zone_ids: np.ndarray | None = None
 _zone_lats: np.ndarray | None = None
@@ -55,13 +59,62 @@ _zone_lons: np.ndarray | None = None
 _coord_cache: dict[tuple[float, float], int] = {}
 
 
+# DB helpers
+def wait_for_db() -> None:
+    while True:
+        try:
+            with psycopg.connect(DATABASE_URL):
+                pass
+            print("Postgres ready.")
+            return
+        except Exception:
+            print("Postgres not ready, retrying in 3 s…")
+            time.sleep(3)
+
+
+def flush_to_postgres() -> None:
+    global _last_flush
+    now = time.monotonic()
+    if now - _last_flush < LIVE_LOG_FLUSH_INTERVAL or not _live_buffer:
+        return
+
+    records = list(_live_buffer)
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO live_trips (
+                        pickup_datetime, dropoff_datetime, passenger_count,
+                        trip_distance, pu_location_id, do_location_id,
+                        total_amount, emitted_at
+                    ) VALUES (
+                        %(pickup_datetime)s, %(dropoff_datetime)s, %(passenger_count)s,
+                        %(trip_distance)s, %(pu_location_id)s, %(do_location_id)s,
+                        %(total_amount)s, %(emitted_at)s
+                    )
+                    """,
+                    records,
+                )
+                # Keep only the last 10 minutes of trips
+                cur.execute(
+                    "DELETE FROM live_trips WHERE emitted_at < NOW() - INTERVAL '10 minutes'"
+                )
+            conn.commit()
+        _live_buffer.clear()
+    except Exception as ex:
+        print(f"DB flush failed: {ex}")
+
+    _last_flush = now
+
+
+# Kafka
 def wait_for_kafka() -> KafkaProducer:
-    """Kafka connection"""
     while True:
         try:
             producer = KafkaProducer(
                 bootstrap_servers=BOOTSTRAP_SERVERS,
-                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                value_serializer=lambda v: __import__("json").dumps(v).encode("utf-8"),
                 linger_ms=20,
                 acks=1,
             )
@@ -72,10 +125,7 @@ def wait_for_kafka() -> KafkaProducer:
 
 
 # Data loading
-
-
 _WANTED_COLS = [c for aliases in SOURCE_ALIASES.values() for c in aliases]
-
 BATCH_SIZE = int(os.getenv("PARQUET_BATCH_SIZE", "500"))
 
 
@@ -130,7 +180,6 @@ def _nearest_zone_id(lat, lon) -> int | None:
         return cached
 
     zone_ids, zone_lats, zone_lons = _load_zone_centroids()
-    # Fast nearest-by-distance (sufficient for producer normalization)
     d2 = (zone_lats - lat_f) ** 2 + (zone_lons - lon_f) ** 2
     idx = int(np.argmin(d2))
     zid = int(zone_ids[idx])
@@ -173,13 +222,7 @@ def find_data_files() -> list[str]:
     return sorted(glob(str(Path(DATA_DIR) / "*.parquet")))
 
 
-# Streaming helpers
 def stream_file_batched(path: str, time_offset: timedelta) -> Iterable[dict[str, str]]:
-    """Read a parquet file in small batches and yield rows immediately.
-
-    Rows start flowing after the first BATCH_SIZE records are read — no need
-    to load the entire file into memory before sending.
-    """
     import pyarrow.parquet as pq
 
     try:
@@ -227,27 +270,7 @@ def to_event(row: dict[str, str]) -> dict:
     }
 
 
-# Live log
-def flush_live_log() -> None:
-    global _last_flush
-    now = time.monotonic()
-    if now - _last_flush < LIVE_LOG_FLUSH_INTERVAL:
-        return
-    if not _live_buffer:
-        return
-    path = Path(LIVE_LOG_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    try:
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(list(_live_buffer), f)
-        tmp.replace(path)
-    except Exception as ex:
-        print(f"Live log write failed: {ex}")
-    _last_flush = now
-
-
-# Synthetic fallback
+#  Synthetic fallback
 def synthetic_rows() -> Iterable[dict[str, str]]:
     import random
 
@@ -270,20 +293,15 @@ def synthetic_rows() -> Iterable[dict[str, str]]:
 
 
 def rotating_rows() -> Iterable[dict[str, str]]:
-    """Yield rows from all parquet files in order, cycling forever.
-
-    Each file is read in BATCH_SIZE chunks so the first rows are sent to Kafka
-    within milliseconds of startup — no full-file pre-load required.
-    """
     data_files = find_data_files()
     if not data_files:
         print(f"No parquet files found in {DATA_DIR}. Using synthetic data.")
         yield from synthetic_rows()
         return
 
-    print(f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches.")
-    # Advance timestamps by 31 days per file-cycle so replayed data always
-    # looks recent when the producer loops back to the beginning.
+    print(
+        f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches."
+    )
     time_offset = timedelta()
     cycle = 0
 
@@ -296,7 +314,14 @@ def rotating_rows() -> Iterable[dict[str, str]]:
         cycle += 1
 
 
+# Main
 def main() -> None:
+    if WRITE_LIVE_TRIPS_FROM_PRODUCER:
+        wait_for_db()
+        print("Producer direct DB logging enabled.")
+    else:
+        print("Producer direct DB logging disabled (consumer writes live_trips).")
+
     producer = wait_for_kafka()
     sent = 0
 
@@ -304,8 +329,12 @@ def main() -> None:
         try:
             event = to_event(row)
             producer.send(TOPIC, event)
-            _live_buffer.append(event)
-            flush_live_log()
+            if WRITE_LIVE_TRIPS_FROM_PRODUCER:
+                _live_buffer.append(event)
+                if len(_live_buffer) > LIVE_LOG_MAX:
+                    # Keep memory bounded if DB is temporarily unavailable.
+                    _live_buffer[:] = _live_buffer[-LIVE_LOG_MAX:]
+                flush_to_postgres()
             sent += 1
 
             if sent % 500 == 0:

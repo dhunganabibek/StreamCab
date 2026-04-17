@@ -1,106 +1,108 @@
 # StreamCab
 
-**From Parquet to Real-Time Predictions**.  
-From raw historical parquet data to a live Kafka + Spark pipeline with XGBoost fare and tip predictions, powered by an interactive dashboard.
-
-## Overview
-
-![App Homepage](./assets/app.png)
-
-## Build with
-
-- Python for data processing and application logic
-- Apache Kafka for real-time event streaming
-- PySpark and Spark Structured Streaming for stream processing
-- XGBoost for tip prediction
-- Streamlit for interactive visualization
-- Docker Compose for local **orchestration**
+StreamCab turns historical taxi parquet data into a live pipeline with Kafka, Spark, model inference, and a Streamlit dashboard.
 
 ## Architecture
 
-![Architectural Diagram](./assets/architecture.png)
+This project runs as 6 services:
 
----
+1. `kafka` (Kafka broker + producer)
+2. `postgres` (state store)
+3. `app` (spark + predictor + dashboard)
+4. `consumer` (raw Kafka consumer -> Postgres `live_trips`)
+5. `train-once` (manual one-shot training job)
+6. `control-center` (Kafka UI)
+
+The `app` container runs three processes:
+
+1. Spark streaming pipeline (Kafka -> Postgres `traffic_agg`)
+2. Realtime predictor (`traffic_agg` -> `predictions`)
+3. Streamlit dashboard
+
+The `consumer` container runs:
+
+1. Raw Kafka consumer (Kafka -> Postgres `live_trips`)
 
 ## Quick Start
 
-.env file is not copied committed to Github for security reason. Create you own .env file. See .env.example for reference.
-
-### Step 1 — Download TLC data
-
----
-
-This end point have rate limiting so try to keep start and end date small
+### Configure environment
 
 ```bash
-python scripts/download_tlc_data.py --output data/raw-data/parquet --start 2022-01 --end 2024-12
+cp .env.example .env
 ```
 
-### Step 2 — Train the model.
+Local mode defaults are already set.
 
-Please update the env file with location of your training data.
+- Download and runtime both use the same local host folder: `RAW_DATA_HOST_PATH` (default: `./data/raw-data`).
+- `train-once` uses local data by default.
+- For S3 training, run `train-once` with a one-time override:
+  `docker compose run --rm -e RAW_DATA_DIR=s3://your-bucket/streamcab/parquet train-once`
+
+### Download a small data slice
+
+This API has rate limiting, so use small date ranges.
+
+```bash
+python scripts/download_tlc_data.py --output data/raw-data/parquet --start 2022-01 --end 2022-03
+```
+
+### Train model once
 
 ```bash
 docker compose run --rm train-once
 ```
 
-Once your training is completed, you should see:
+Expected outputs:
 
-| File                          | Contents                            |
-| ----------------------------- | ----------------------------------- |
-| `models/traffic_model.joblib` | Trained XGBoost predictor           |
-| `models/metrics.json`         | Train & test MAE / MAPE vs baseline |
+- `models/traffic_model.joblib`
+- `models/metrics.json`
 
-### Step 3 — Start the live pipeline
-
-This is spin multiplied docker containers.
+### Start runtime stack
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Then open **[http://localhost:8501](http://localhost:8501)** for the dashboard.
+Open dashboard:
 
----
+- http://localhost:8501
 
-## Suggested Data Locations.
+Check the kafka UI:
 
-| Path                                       | Contents                                  |
-| ------------------------------------------ | ----------------------------------------- |
-| `data/raw-data/parquet/`                   | Raw yellow taxi parquet files             |
-| `data/models/traffic_model.joblib`         | Trained XGBoost model                     |
-| `data/models/metrics.json`                 | Training metrics                          |
-| `data/models/live_trips.json`              | Rolling log of last 200 Kafka trips       |
-| `data/models/realtime_predictions.parquet` | Per-zone predictions (updated every 30 s) |
-| `data/reference/zone_centroids.csv`        | NYC TLC zone names and map coordinates    |
+- http://localhost:9021/
 
----
+You should see a consumer group named `streamcab-live-consumer` after startup.
 
 ## Useful Commands
 
 ```bash
-# One-time model training
-docker compose run --rm train-once
+# Start core services
 
-# Start full pipeline
-docker compose up --build
+docker compose up --build -d
+
+# Tail app logs
+
+docker compose logs -f app
+
+# kafka + producer logs
+
+docker compose logs -f kafka
 
 # Stop everything
-docker compose down
 
-# Convert parquet files to CSV (optional)
-python scripts/convert-to-csv.py --input data/raw-data/parquet --output data/raw-data/csv
+docker compose down
 ```
 
-## Services
+## Notes
 
-| Service           | Description                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `kafka`           | Confluent Kafka in KRaft mode                                         |
-| `init-kafka`      | Creates the `taxi-trips` topic on first startup                       |
-| `control-center`  | Confluent Control Center UI — [localhost:9021](http://localhost:9021) |
-| `producer`        | Replays TLC parquet → Kafka at ~7 trips/second                        |
-| `spark-streaming` | Spark Structured Streaming → 10-min window aggregates                 |
-| `predictor`       | Runs XGBoost fare model every 30 s → predictions file                 |
-| `dashboard`       | Streamlit dashboard — [localhost:8501](http://localhost:8501)         |
-| `train-once`      | One-shot trainer (run separately with `docker compose run`)           |
+- Postgres host port defaults to `5433` to avoid local conflicts.
+- One topic setting is enough: `KAFKA_TOPIC` is used by both producer and stream processor.
+- The app and producer read data from `/opt/streamcab/data/raw-data/parquet` in containers.
+- `RAW_DATA_HOST_PATH` controls what host folder is mounted to that container path.
+- `RAW_DATA_DIR` is an optional `train-once` override (for example `s3://...`).
+- `train-once` runs only when invoked manually:
+  `docker compose run --rm train-once`
+
+## Diagram
+
+![Architectural Diagram](./assets/architecture.png)
