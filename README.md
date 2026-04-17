@@ -25,6 +25,13 @@ The `consumer` container runs:
 
 ## Quick Start
 
+### Install all the dependencies and set precommit hooks
+
+```bash
+uv sync --all-extras
+uv run pre-commit install
+```
+
 ### Configure environment
 
 ```bash

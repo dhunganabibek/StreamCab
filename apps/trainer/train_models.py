@@ -89,7 +89,8 @@ def _get_zone_tree() -> tuple[BallTree, np.ndarray]:
         zones = pd.read_csv(ZONE_CENTROIDS_FILE)
         coords_rad = np.radians(zones[["latitude", "longitude"]].values)
         _zone_tree = BallTree(coords_rad, metric="haversine")
-        _zone_ids = zones["location_id"].values
+        _zone_ids = cast(np.ndarray, zones["location_id"].to_numpy())
+    assert _zone_ids is not None
     return _zone_tree, _zone_ids
 
 
@@ -138,7 +139,10 @@ def _needed_columns(file_cols: set[str]) -> list[str] | None:
     if not all([pickup, dropoff, distance, amount]) or (not location and not has_latlon):
         return None
 
-    cols = [pickup, dropoff, distance, amount]  # type: ignore[list-item]
+    assert (
+        pickup is not None and dropoff is not None and distance is not None and amount is not None
+    )
+    cols: list[str] = [pickup, dropoff, distance, amount]
     if location:
         cols.append(location)
     else:
@@ -177,29 +181,41 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
         print(f"  SKIP {fname}: missing required columns {missing or ['location/latlon']}")
         return pd.DataFrame()
 
+    assert pickup_col is not None and dropoff_col is not None
+    assert distance_col is not None and amount_col is not None
+
     # Work with Series directly to avoid copying the full DataFrame
-    pickup_ts = pd.to_datetime(raw[pickup_col], errors="coerce")
-    dropoff_ts = pd.to_datetime(raw[dropoff_col], errors="coerce")
-    trip_distance = pd.to_numeric(raw[distance_col], errors="coerce")
-    total_amount = pd.to_numeric(raw[amount_col], errors="coerce")
-    duration_min = (dropoff_ts - pickup_ts).dt.total_seconds() / 60
-    speed_mph = trip_distance / (duration_min / 60).replace(0, float("nan"))
+    pickup_ts = cast(pd.Series, pd.to_datetime(raw[pickup_col], errors="coerce"))
+    dropoff_ts = cast(pd.Series, pd.to_datetime(raw[dropoff_col], errors="coerce"))
+    trip_distance = cast(pd.Series, pd.to_numeric(raw[distance_col], errors="coerce"))
+    total_amount = cast(pd.Series, pd.to_numeric(raw[amount_col], errors="coerce"))
+    duration_min = cast(pd.Series, (dropoff_ts - pickup_ts).dt.total_seconds() / 60)
+    speed_mph = cast(pd.Series, trip_distance / (duration_min / 60).replace(0, float("nan")))
 
     if has_zone_id:
-        pu_location_id = pd.to_numeric(raw[location_col], errors="coerce")
-        location_mask = pu_location_id > 0
+        assert location_col is not None
+        pu_location_id = cast(pd.Series, pd.to_numeric(raw[location_col], errors="coerce"))
+        location_mask = cast(pd.Series, pu_location_id > 0)
     else:
         # Pre-2017: filter to NYC bounds then snap to nearest zone
+        assert lat_col is not None and lon_col is not None
         lat = pd.to_numeric(raw[lat_col], errors="coerce")
         lon = pd.to_numeric(raw[lon_col], errors="coerce")
-        location_mask = lat.between(_NYC_LAT[0], _NYC_LAT[1]) & lon.between(
-            _NYC_LON[0], _NYC_LON[1]
+        lat_series = cast(pd.Series, lat)
+        lon_series = cast(pd.Series, lon)
+        location_mask = cast(
+            pd.Series,
+            lat_series.between(_NYC_LAT[0], _NYC_LAT[1])
+            & lon_series.between(_NYC_LON[0], _NYC_LON[1]),
         )
         if not location_mask.any():
             return pd.DataFrame()
         # Only pass the valid lat/lon rows to BallTree — no full-DataFrame copy
         pu_location_id = pd.Series(np.nan, index=raw.index, dtype="float64")
-        pu_location_id[location_mask] = _snap_to_zone(lat[location_mask], lon[location_mask]).values
+        pu_location_id[location_mask] = _snap_to_zone(
+            cast(pd.Series, lat_series[location_mask]),
+            cast(pd.Series, lon_series[location_mask]),
+        ).to_numpy()
         del lat, lon
 
     mask = (
@@ -218,20 +234,20 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
 
     # Assemble only the rows that pass the filter — one small DataFrame instead
     # of copying the full chunk multiple times
-    idx = mask[mask].index
+    idx = cast(pd.Series, mask[mask]).index
     if idx.empty:
         return pd.DataFrame()
 
-    window_start = pickup_ts[idx].dt.floor("10min")
+    window_start = cast(pd.Series, pickup_ts[idx]).dt.floor("10min")
     filtered = pd.DataFrame(
         {
             "window_start": window_start,
             "window_end": window_start + WINDOW_SIZE,
-            "pu_location_id": pu_location_id[idx].values,
-            "trip_distance": trip_distance[idx].values,
-            "duration_min": duration_min[idx].values,
-            "speed_mph": speed_mph[idx].values,
-            "total_amount": total_amount[idx].values,
+            "pu_location_id": cast(pd.Series, pu_location_id[idx]).to_numpy(),
+            "trip_distance": cast(pd.Series, trip_distance[idx]).to_numpy(),
+            "duration_min": cast(pd.Series, duration_min[idx]).to_numpy(),
+            "speed_mph": cast(pd.Series, speed_mph[idx]).to_numpy(),
+            "total_amount": cast(pd.Series, total_amount[idx]).to_numpy(),
         }
     )
     del (

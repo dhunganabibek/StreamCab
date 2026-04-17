@@ -3,6 +3,7 @@
 import os
 from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
 import joblib
 import numpy as np
@@ -30,6 +31,22 @@ MAP_REFRESH = 15  # seconds — map refreshes
 LIVE_SAMPLE_LIMIT = int(os.getenv("LIVE_SAMPLE_LIMIT", "200"))
 
 
+def _connect_dict() -> Any:
+    return psycopg.connect(DATABASE_URL, row_factory=cast(Any, psycopg.rows.dict_row))
+
+
+def _series(value: object) -> pd.Series:
+    return cast(pd.Series, value)
+
+
+def _num_series(value: object, default: float = 0.0) -> pd.Series:
+    return _series(pd.to_numeric(value, errors="coerce")).fillna(default)
+
+
+def _dt_series(value: object) -> pd.Series:
+    return _series(pd.to_datetime(cast(Any, value), errors="coerce"))
+
+
 # Loaders  (cached to avoid re-reading disk on every fragment rerun)
 @st.cache_resource
 def load_model():
@@ -44,7 +61,7 @@ def load_model():
 @st.cache_data(ttl=TRIP_REFRESH)
 def load_live_trips() -> pd.DataFrame:
     try:
-        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+        with _connect_dict() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -66,7 +83,7 @@ def load_live_trips() -> pd.DataFrame:
 @st.cache_data(ttl=TRIP_REFRESH)
 def load_trips_per_minute() -> int:
     try:
-        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+        with _connect_dict() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -87,7 +104,7 @@ def load_trips_per_minute() -> int:
 def load_predictions() -> pd.DataFrame:
     """Latest prediction per zone, written by the predictor service."""
     try:
-        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+        with _connect_dict() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -109,7 +126,7 @@ def load_predictions() -> pd.DataFrame:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
         df["predicted_tip"] = ((df["predicted_tip_low"] + df["predicted_tip_high"]) / 2).round(2)
-        return df.sort_values("predicted_fare", ascending=False).reset_index(drop=True)
+        return df.sort_values(by="predicted_fare", ascending=False).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
@@ -271,28 +288,24 @@ def predict_trip_fares(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> 
     )
     t["pickup_dt"] = pd.to_datetime(pickup_col, errors="coerce")
     t["dropoff_dt"] = pd.to_datetime(dropoff_col, errors="coerce")
-    t["avg_duration_min"] = (
-        ((t["dropoff_dt"] - t["pickup_dt"]).dt.total_seconds() / 60)
-        .clip(lower=1, upper=180)
-        .fillna(10)
+    duration_min = _series(
+        (_series(t["dropoff_dt"]) - _series(t["pickup_dt"])).dt.total_seconds() / 60
     )
-    t["avg_trip_distance"] = pd.to_numeric(
-        t.get("trip_distance", pd.Series(0, index=t.index)), errors="coerce"
-    ).fillna(0)
-    t["avg_speed_mph"] = (
-        (t["avg_trip_distance"] / (t["avg_duration_min"] / 60).replace(0, np.nan))
-        .clip(lower=1, upper=80)
-        .fillna(15)
-    )
-    t["hour"] = t["pickup_dt"].dt.hour.fillna(12).astype(int)
-    t["day_of_week"] = t["pickup_dt"].dt.dayofweek.fillna(0).astype(int)
+    t["avg_duration_min"] = _series(duration_min.clip(lower=1, upper=180)).fillna(10)
+    t["avg_trip_distance"] = _num_series(t.get("trip_distance", pd.Series(0, index=t.index)))
+    t["avg_speed_mph"] = _series(
+        (
+            _series(t["avg_trip_distance"])
+            / (_series(t["avg_duration_min"]) / 60).replace(0, np.nan)
+        ).clip(lower=1, upper=80)
+    ).fillna(15)
+    t["hour"] = _series(_series(t["pickup_dt"]).dt.hour).fillna(12).astype(int)
+    t["day_of_week"] = _series(_series(t["pickup_dt"]).dt.dayofweek).fillna(0).astype(int)
     t["is_weekend"] = (t["day_of_week"] >= 5).astype(int)
     t["trip_count"] = 1
 
     model_df = pd.DataFrame(index=t.index)
-    model_df["pu_location_id"] = pd.to_numeric(
-        t.get("pu_location_id", pd.Series(0, index=t.index)), errors="coerce"
-    ).fillna(0)
+    model_df["pu_location_id"] = _num_series(t.get("pu_location_id", pd.Series(0, index=t.index)))
     model_df["hour"] = t["hour"]
     model_df["day_of_week"] = t["day_of_week"]
     model_df["is_weekend"] = t["is_weekend"]
@@ -305,7 +318,7 @@ def predict_trip_fares(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> 
         if col not in model_df.columns:
             model_df[col] = 0
 
-    preds = fare_model.predict(model_df[fare_features]).clip(min=0)
+    preds = fare_model.predict(cast(pd.DataFrame, model_df[fare_features])).clip(min=0)
     return pd.Series(preds, index=t.index, dtype=float)
 
 
@@ -356,11 +369,11 @@ def live_panel():
         emitted_col = (
             trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
         )
-        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(0)
-        trips["trip_distance"] = pd.to_numeric(trip_distance_col, errors="coerce").fillna(0)
-        trips["pu_location_id"] = pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
-        trips["do_location_id"] = pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
-        trips["emitted_at"] = pd.to_datetime(emitted_col, errors="coerce")
+        trips["total_amount"] = _num_series(total_amount_col)
+        trips["trip_distance"] = _num_series(trip_distance_col)
+        trips["pu_location_id"] = _num_series(pu_col).astype(int)
+        trips["do_location_id"] = _num_series(do_col).astype(int)
+        trips["emitted_at"] = _dt_series(emitted_col)
         trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
         trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
 
@@ -433,49 +446,24 @@ def trips_panel():
     trips = pd.DataFrame()
     if not live_raw.empty:
         trips = live_raw.copy()
-        trips["total_amount"] = pd.to_numeric(
-            (trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)),
-            errors="coerce",
-        ).fillna(0)
-        trips["trip_distance"] = pd.to_numeric(
-            (
-                trips["trip_distance"]
-                if "trip_distance" in trips
-                else pd.Series(0, index=trips.index)
-            ),
-            errors="coerce",
-        ).fillna(0)
-        trips["pu_location_id"] = (
-            pd.to_numeric(
-                (
-                    trips["pu_location_id"]
-                    if "pu_location_id" in trips
-                    else pd.Series(0, index=trips.index)
-                ),
-                errors="coerce",
-            )
-            .fillna(0)
-            .astype(int)
+        trips["total_amount"] = _num_series(
+            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
         )
-        trips["do_location_id"] = (
-            pd.to_numeric(
-                (
-                    trips["do_location_id"]
-                    if "do_location_id" in trips
-                    else pd.Series(0, index=trips.index)
-                ),
-                errors="coerce",
-            )
-            .fillna(0)
-            .astype(int)
+        trips["trip_distance"] = _num_series(
+            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
         )
-        trips["emitted_at"] = pd.to_datetime(
-            (
-                trips["emitted_at"]
-                if "emitted_at" in trips
-                else pd.Series(pd.NaT, index=trips.index)
-            ),
-            errors="coerce",
+        trips["pu_location_id"] = _num_series(
+            trips["pu_location_id"]
+            if "pu_location_id" in trips
+            else pd.Series(0, index=trips.index)
+        ).astype(int)
+        trips["do_location_id"] = _num_series(
+            trips["do_location_id"]
+            if "do_location_id" in trips
+            else pd.Series(0, index=trips.index)
+        ).astype(int)
+        trips["emitted_at"] = _dt_series(
+            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
         )
         trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
         trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
@@ -483,7 +471,7 @@ def trips_panel():
         if model_bundle is not None:
             trips_hash = str(len(trips)) + str(trips["pu_location_id"].sum())
             trip_pred_fares = predict_trip_fares(model_bundle, trips_hash + "_tbl", trips)
-            trip_pred_num = pd.to_numeric(trip_pred_fares, errors="coerce").fillna(0)
+            trip_pred_num = _num_series(trip_pred_fares)
             trips["model_tip"] = (
                 (trip_pred_num * 0.18).round(2) if not trip_pred_fares.empty else np.nan
             )
@@ -495,21 +483,24 @@ def trips_panel():
         st.info("Waiting for Kafka data…")
     else:
         last_ts = trips["emitted_at"].max()
-        last_text = last_ts.strftime("%H:%M:%S") if pd.notna(last_ts) else "—"
+        last_text = last_ts.strftime("%H:%M:%S") if isinstance(last_ts, pd.Timestamp) else "—"
         st.caption(
             f"Latest sample: {last_text} · Rows show most recent trips with model-estimated tip"
         )
-        show = trips.sort_values("emitted_at", ascending=False).head(20).copy()
+        show = trips.sort_values(by="emitted_at", ascending=False).head(20).copy()
         show["Time"] = show["emitted_at"].dt.strftime("%H:%M:%S")
-        miles_vals = pd.to_numeric(show["trip_distance"], errors="coerce").fillna(0)
-        show["Miles"] = [f"{v:.1f} mi" for v in miles_vals.round(1).to_list()]
+        miles_vals = _num_series(show["trip_distance"])
+        show["Miles"] = [f"{float(v):.1f} mi" for v in miles_vals.round(1).to_numpy()]
         show["Fare"] = show["total_amount"].round(2)
         show["Model Tip"] = show["model_tip"].round(2)
+        display_df = cast(
+            pd.DataFrame,
+            show[["Time", "pickup_name", "dropoff_name", "Miles", "Fare", "Model Tip"]].copy(),
+        )
+        display_df = display_df.rename(columns={"pickup_name": "Pickup", "dropoff_name": "Dropoff"})
         st.markdown('<div class="section-wrap">', unsafe_allow_html=True)
         st.dataframe(
-            show[["Time", "pickup_name", "dropoff_name", "Miles", "Fare", "Model Tip"]].rename(
-                columns={"pickup_name": "Pickup", "dropoff_name": "Dropoff"}
-            ),
+            display_df,
             use_container_width=True,
             hide_index=True,
             height=320,
@@ -553,11 +544,11 @@ def map_panel():
         emitted_col = (
             trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
         )
-        trips["total_amount"] = pd.to_numeric(total_amount_col, errors="coerce").fillna(0)
-        trips["trip_distance"] = pd.to_numeric(trip_distance_col, errors="coerce").fillna(0)
-        trips["pu_location_id"] = pd.to_numeric(pu_col, errors="coerce").fillna(0).astype(int)
-        trips["do_location_id"] = pd.to_numeric(do_col, errors="coerce").fillna(0).astype(int)
-        trips["emitted_at"] = pd.to_datetime(emitted_col, errors="coerce")
+        trips["total_amount"] = _num_series(total_amount_col)
+        trips["trip_distance"] = _num_series(trip_distance_col)
+        trips["pu_location_id"] = _num_series(pu_col).astype(int)
+        trips["do_location_id"] = _num_series(do_col).astype(int)
+        trips["emitted_at"] = _dt_series(emitted_col)
 
     st.markdown("### City Map — All Stations & Most Popular")
 
@@ -574,24 +565,27 @@ def map_panel():
         station_base["total_trips"] = 0
     else:
         pickup_counts = (
-            trips.groupby("pu_location_id")
-            .size()
-            .reset_index(name="pickup_trips")
-            .rename(columns={"pu_location_id": "location_id"})
+            cast(pd.Series, trips.groupby("pu_location_id").size())
+            .rename("pickup_trips")
+            .to_frame()
+            .reset_index()
         )
+        pickup_counts = pickup_counts.rename(columns={"pu_location_id": "location_id"})
         dropoff_counts = (
-            trips.groupby("do_location_id")
-            .size()
-            .reset_index(name="dropoff_trips")
-            .rename(columns={"do_location_id": "location_id"})
+            cast(pd.Series, trips.groupby("do_location_id").size())
+            .rename("dropoff_trips")
+            .to_frame()
+            .reset_index()
         )
+        dropoff_counts = dropoff_counts.rename(columns={"do_location_id": "location_id"})
         station_base = station_base.merge(pickup_counts, on="location_id", how="left")
         station_base = station_base.merge(dropoff_counts, on="location_id", how="left")
         station_base["pickup_trips"] = station_base["pickup_trips"].fillna(0).astype(int)
         station_base["dropoff_trips"] = station_base["dropoff_trips"].fillna(0).astype(int)
         station_base["total_trips"] = station_base["pickup_trips"] + station_base["dropoff_trips"]
 
-    popular = station_base.sort_values("total_trips", ascending=False).head(12).copy()
+    station_base_df = cast(pd.DataFrame, station_base)
+    popular = station_base_df.sort_values(by="total_trips", ascending=False).head(12).copy()
     top_total = max(int(popular["total_trips"].max()), 1)
     popular["size"] = popular["total_trips"].apply(lambda v: 12 + (float(v) / top_total * 20))
     station_hover = station_base.apply(

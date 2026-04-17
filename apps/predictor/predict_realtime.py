@@ -7,9 +7,9 @@ Every PREDICTION_INTERVAL_SECONDS:
 
 import os
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import joblib
 import pandas as pd
@@ -18,13 +18,30 @@ import psycopg.rows
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab"
-)
-MODEL_FILE = Path(
-    os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib"))
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
+MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
 PREDICTION_INTERVAL_SECONDS = int(os.getenv("PREDICTION_INTERVAL_SECONDS", "30"))
+
+
+def _to_dt(value: object) -> datetime:
+    scalar = cast(Any, value)
+    if bool(pd.isna(scalar)):
+        raise ValueError("Expected a timestamp value, got null")
+    return cast(datetime, pd.Timestamp(scalar).to_pydatetime())
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    scalar = cast(Any, value)
+    if bool(pd.isna(scalar)):
+        return default
+    return int(scalar)
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    scalar = cast(Any, value)
+    if bool(pd.isna(scalar)):
+        return default
+    return float(scalar)
 
 
 def wait_for_db() -> None:
@@ -41,7 +58,10 @@ def wait_for_db() -> None:
 
 def load_aggregates() -> pd.DataFrame:
     try:
-        with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+        with psycopg.connect(
+            DATABASE_URL,
+            row_factory=cast(Any, psycopg.rows.dict_row),
+        ) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -72,21 +92,21 @@ def load_aggregates() -> pd.DataFrame:
 def write_predictions(output: pd.DataFrame) -> None:
     records = [
         (
-            int(r.pu_location_id),
-            r.window_start.to_pydatetime(),
-            r.window_end.to_pydatetime(),
-            int(r.trip_count) if pd.notna(r.trip_count) else 0,
-            float(r.avg_speed_mph) if pd.notna(r.avg_speed_mph) else 0.0,
-            float(r.avg_trip_distance) if pd.notna(r.avg_trip_distance) else 0.0,
-            float(r.predicted_avg_fare),
-            float(r.predicted_tip_low),
-            float(r.predicted_tip_high),
-            float(r.surge_multiplier),
-            r.prediction_for_window_start.to_pydatetime(),
-            r.prediction_for_window_end.to_pydatetime(),
-            r.prediction_generated_at.to_pydatetime(),
+            _to_int(r["pu_location_id"]),
+            _to_dt(r["window_start"]),
+            _to_dt(r["window_end"]),
+            _to_int(r.get("trip_count", 0)),
+            _to_float(r.get("avg_speed_mph", 0.0)),
+            _to_float(r.get("avg_trip_distance", 0.0)),
+            _to_float(r["predicted_avg_fare"]),
+            _to_float(r["predicted_tip_low"]),
+            _to_float(r["predicted_tip_high"]),
+            _to_float(r["surge_multiplier"], 1.0),
+            _to_dt(r["prediction_for_window_start"]),
+            _to_dt(r["prediction_for_window_end"]),
+            _to_dt(r["prediction_generated_at"]),
         )
-        for r in output.itertuples()
+        for r in output.to_dict(orient="records")
     ]
 
     try:
@@ -140,15 +160,11 @@ def run_prediction_cycle() -> None:
         if col not in rows.columns:
             rows[col] = 0
 
-    rows["predicted_avg_fare"] = (
-        fare_model.predict(rows[fare_features]).clip(min=0).round(2)
-    )
+    rows["predicted_avg_fare"] = fare_model.predict(rows[fare_features]).clip(min=0).round(2)
     rows["predicted_tip_low"] = (rows["predicted_avg_fare"] * 0.15).round(2)
     rows["predicted_tip_high"] = (rows["predicted_avg_fare"] * 0.20).round(2)
 
-    median_trips = (
-        float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
-    )
+    median_trips = float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
     if median_trips > 0 and "trip_count" in rows.columns:
         rows["surge_multiplier"] = (
             (rows["trip_count"] / median_trips).clip(lower=1.0, upper=3.0).round(2)

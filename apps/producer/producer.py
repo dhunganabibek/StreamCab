@@ -23,18 +23,19 @@ BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips")
 DATA_DIR = os.getenv("DATA_DIR", str(_PROJECT_ROOT / "data/raw-data/parquet"))
 REPLAY_SLEEP_SECONDS = float(os.getenv("REPLAY_SLEEP_SECONDS", "0.15"))
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab"
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
 ZONE_CENTROIDS_FILE = os.getenv(
     "ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv")
 )
 
 LIVE_LOG_MAX = 200
 LIVE_LOG_FLUSH_INTERVAL = 2.0  # seconds between DB flushes
-WRITE_LIVE_TRIPS_FROM_PRODUCER = os.getenv(
-    "WRITE_LIVE_TRIPS_FROM_PRODUCER", "false"
-).lower() in {"1", "true", "yes", "on"}
+WRITE_LIVE_TRIPS_FROM_PRODUCER = os.getenv("WRITE_LIVE_TRIPS_FROM_PRODUCER", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 SOURCE_ALIASES = {
     "pickup": ["tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"],
@@ -299,9 +300,7 @@ def rotating_rows() -> Iterable[dict[str, str]]:
         yield from synthetic_rows()
         return
 
-    print(
-        f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches."
-    )
+    print(f"Found {len(data_files)} parquet file(s) — streaming in {BATCH_SIZE}-row batches.")
     time_offset = timedelta()
     cycle = 0
 
