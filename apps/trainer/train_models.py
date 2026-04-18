@@ -11,7 +11,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import joblib
 import numpy as np
@@ -32,9 +32,14 @@ ZONE_CENTROIDS_FILE = Path(
 # Set MAX_FILES to limit how many parquet files are used
 _MAX_FILES_ENV = os.getenv("MAX_FILES", "")
 MAX_FILES: int | None = int(_MAX_FILES_ENV) if _MAX_FILES_ENV.strip() else None
+PARQUET_BATCH_SIZE = int(os.getenv("PARQUET_BATCH_SIZE", "500000"))
+TRAIN_BATCH_ROWS = int(os.getenv("TRAIN_BATCH_ROWS", "250000"))
+VALIDATION_FRACTION = float(os.getenv("VALIDATION_FRACTION", "0.1"))
+INIT_TREES = int(os.getenv("INIT_TREES", "120"))
+TREES_PER_BATCH = int(os.getenv("TREES_PER_BATCH", "40"))
 
 
-# Storage abstraction — local path, symlink, or S3 all look the same
+# Storage abstraction
 def _build_filesystem(raw_dir: str) -> tuple[pafs.FileSystem, list[str]]:
     """Return (filesystem, sorted list of parquet paths) for local or S3 sources."""
     if raw_dir.startswith("s3://"):
@@ -75,6 +80,15 @@ FARE_FEATURES = [
     "trip_count",
 ]
 TARGET = "avg_total_amount"
+
+_AGG_KEYS = ["window_start", "window_end", "pu_location_id"]
+_AGG_SUM_COLS = [
+    "trip_count",
+    "trip_distance_sum",
+    "duration_min_sum",
+    "speed_mph_sum",
+    "total_amount_sum",
+]
 
 
 # Zone centroid lookup (for pre-2017 lat/lon files)
@@ -265,18 +279,58 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
         filtered.groupby(["window_start", "window_end", "pu_location_id"])
         .agg(
             trip_count=("trip_distance", "count"),
-            avg_trip_distance=("trip_distance", "mean"),
-            avg_duration_min=("duration_min", "mean"),
-            avg_speed_mph=("speed_mph", "mean"),
-            avg_total_amount=("total_amount", "mean"),
+            trip_distance_sum=("trip_distance", "sum"),
+            duration_min_sum=("duration_min", "sum"),
+            speed_mph_sum=("speed_mph", "sum"),
+            total_amount_sum=("total_amount", "sum"),
         )
         .reset_index()
     )
     del filtered
 
-    agg["window_start"] = pd.to_datetime(agg["window_start"]).dt.tz_localize("UTC")
-    agg["window_end"] = pd.to_datetime(agg["window_end"]).dt.tz_localize("UTC")
+    agg["window_start"] = pd.to_datetime(agg["window_start"], utc=True, errors="coerce")
+    agg["window_end"] = pd.to_datetime(agg["window_end"], utc=True, errors="coerce")
+    agg = agg.dropna(subset=["window_start", "window_end"])
     return agg
+
+
+def _collapse_aggregate_stats(chunks: list[pd.DataFrame]) -> pd.DataFrame:
+    if not chunks:
+        return pd.DataFrame(columns=pd.Index([*_AGG_KEYS, *_AGG_SUM_COLS]))
+
+    merged = pd.concat(chunks, ignore_index=True)
+    collapsed = cast(
+        pd.DataFrame,
+        merged.groupby(_AGG_KEYS, as_index=False)[_AGG_SUM_COLS].sum(),
+    )
+    return collapsed
+
+
+def _finalize_features(stats: pd.DataFrame) -> pd.DataFrame:
+    if stats.empty:
+        return pd.DataFrame()
+
+    out = stats.copy()
+    denom = out["trip_count"].replace(0, np.nan)
+    out["avg_trip_distance"] = out["trip_distance_sum"] / denom
+    out["avg_duration_min"] = out["duration_min_sum"] / denom
+    out["avg_speed_mph"] = out["speed_mph_sum"] / denom
+    out["avg_total_amount"] = out["total_amount_sum"] / denom
+
+    out = out[
+        [
+            "window_start",
+            "window_end",
+            "pu_location_id",
+            "trip_count",
+            "avg_trip_distance",
+            "avg_duration_min",
+            "avg_speed_mph",
+            "avg_total_amount",
+        ]
+    ]
+    out_df = cast(pd.DataFrame, out)
+    return cast(pd.DataFrame, out_df.loc[out_df["avg_total_amount"].notna()])
 
 
 def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
@@ -290,7 +344,7 @@ def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
     suffix = f" (capped at MAX_FILES={MAX_FILES})" if MAX_FILES is not None else ""
     print(f"Found {len(files)} parquet file(s) in {raw_dir}{suffix}")
 
-    agg_chunks: list[pd.DataFrame] = []
+    aggregated_files: list[pd.DataFrame] = []
     total_raw = 0
 
     for i, f in enumerate(files, 1):
@@ -303,22 +357,36 @@ def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
                 print(f"  [{i:>3}/{len(files)}] SKIP {fname}: unusable schema")
                 continue
 
-            chunk = pq.read_table(f, filesystem=fs, columns=needed).to_pandas()
-            n = len(chunk)
+            n = 0
+            file_agg_chunks: list[pd.DataFrame] = []
+            parquet_file = pq.ParquetFile(f, filesystem=fs)
+            for batch in parquet_file.iter_batches(
+                batch_size=PARQUET_BATCH_SIZE,
+                columns=needed,
+            ):
+                chunk = batch.to_pandas()
+                n += len(chunk)
+                agg = _aggregate_chunk(chunk, fname)
+                if not agg.empty:
+                    file_agg_chunks.append(agg)
+                del chunk, agg
+
             total_raw += n
-            agg = _aggregate_chunk(chunk, fname)
-            del chunk
-            if not agg.empty:
-                agg_chunks.append(agg)
-            print(f"  [{i:>3}/{len(files)}] {fname}  ({n:,} raw → {len(agg):,} agg rows)")
+
+            file_agg = _collapse_aggregate_stats(file_agg_chunks)
+            if not file_agg.empty:
+                aggregated_files.append(file_agg)
+
+            print(f"  [{i:>3}/{len(files)}] {fname}  ({n:,} raw → {len(file_agg):,} agg rows)")
         except Exception as ex:
             print(f"  Skipping {fname}: {ex}")
 
-    if not agg_chunks:
+    if not aggregated_files:
         return pd.DataFrame()
 
     print(f"\nTotal raw rows processed: {total_raw:,}")
-    result = pd.concat(agg_chunks, ignore_index=True)
+    stats = _collapse_aggregate_stats(aggregated_files)
+    result = _finalize_features(stats)
     print(f"Aggregated to {len(result):,} (zone, window) rows")
     return result
 
@@ -327,6 +395,87 @@ def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
 def mape(y_true: pd.Series, y_pred: pd.Series) -> float:
     denom = y_true.replace(0, 1e-6)
     return float(((y_true - y_pred).abs() / denom).mean() * 100)
+
+
+def _xgb_params(n_estimators: int) -> dict:
+    return {
+        "n_estimators": n_estimators,
+        "max_depth": 5,
+        "learning_rate": 0.05,
+        "subsample": 0.9,
+        "colsample_bytree": 0.9,
+        "objective": "reg:squarederror",
+        "tree_method": "hist",
+        "random_state": 42,
+        "n_jobs": 2,
+    }
+
+
+def _train_continued_xgb(
+    train_core: pd.DataFrame,
+    val: pd.DataFrame,
+) -> tuple[XGBRegressor, list[dict[str, float]], int, float]:
+    """Train a single evolving booster over chronological row batches."""
+    if len(train_core) < 1:
+        raise ValueError("Continued training requires non-empty train_core data.")
+
+    val_x = val[FARE_FEATURES]
+    val_y = cast(pd.Series, val[TARGET])
+
+    history: list[dict[str, float]] = []
+    model: Any = None
+    best_model: Any = None
+    best_batch = 0
+    best_val_mae = float("inf")
+
+    n_batches = max(1, (len(train_core) + TRAIN_BATCH_ROWS - 1) // TRAIN_BATCH_ROWS)
+    print(
+        f"Training in continued mode: {n_batches} batch(es), "
+        f"{TRAIN_BATCH_ROWS:,} rows per batch (last may be smaller)"
+    )
+
+    for batch_idx, start in enumerate(range(0, len(train_core), TRAIN_BATCH_ROWS), 1):
+        end = min(start + TRAIN_BATCH_ROWS, len(train_core))
+        batch = train_core.iloc[start:end]
+        x_batch = batch[FARE_FEATURES]
+        y_batch = cast(pd.Series, batch[TARGET])
+
+        if model is None:
+            model = XGBRegressor(**_xgb_params(INIT_TREES))
+            model.fit(x_batch, y_batch, eval_set=[(val_x, val_y)], verbose=False)
+        else:
+            next_model = XGBRegressor(**_xgb_params(TREES_PER_BATCH))
+            next_model.fit(
+                x_batch,
+                y_batch,
+                xgb_model=model.get_booster(),
+                eval_set=[(val_x, val_y)],
+                verbose=False,
+            )
+            model = next_model
+
+        val_pred = pd.Series(model.predict(val_x), index=val.index)
+        val_mae = float(mean_absolute_error(val_y, val_pred))
+        val_mape = mape(val_y, val_pred)
+        history.append({"batch": float(batch_idx), "val_mae": val_mae, "val_mape": val_mape})
+
+        if val_mae < best_val_mae:
+            best_val_mae = val_mae
+            best_batch = batch_idx
+            best_model = model
+
+        print(
+            f"  [batch {batch_idx:>2}/{n_batches}] rows={len(batch):,} "
+            f"val_mae={val_mae:.4f} val_mape={val_mape:.2f}%"
+        )
+
+    assert model is not None
+    selected_model = cast(XGBRegressor, best_model if best_model is not None else model)
+    print(
+        f"Selected best batch {best_batch} with validation MAE {best_val_mae:.4f} "
+        f"for final model artifact"
+    )
+    return selected_model, history, best_batch, best_val_mae
 
 
 def train_and_save(df: pd.DataFrame) -> dict:
@@ -361,22 +510,29 @@ def train_and_save(df: pd.DataFrame) -> dict:
         cast(pd.Series, scored[TARGET]), cast(pd.Series, scored["baseline_pred"])
     )
 
-    # XGBoost fare predictor
-    model = XGBRegressor(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=2,
+    # Continued training: keep one evolving booster and update it batch by batch
+    val_rows = max(5000, int(len(train) * VALIDATION_FRACTION))
+    val_rows = min(val_rows, max(1, len(train) // 3))
+    train_core = train.iloc[:-val_rows]
+    val = train.iloc[-val_rows:]
+    if len(train_core) < 10 or len(val) < 5:
+        raise ValueError(
+            f"Not enough rows after validation split: {len(train_core)} train_core, {len(val)} val."
+        )
+
+    print(
+        f"Continued-training split — core train: {len(train_core):,}, "
+        f"validation: {len(val):,}, test: {len(test):,}"
     )
-    model.fit(train[FARE_FEATURES], train[TARGET])
+    model, val_history, best_batch, best_val_mae = _train_continued_xgb(train_core, val)
 
     train_preds = pd.Series(model.predict(train[FARE_FEATURES]), index=train.index)
     train_mae = float(mean_absolute_error(train[TARGET], train_preds))
     train_mape = mape(cast(pd.Series, train[TARGET]), cast(pd.Series, train_preds))
+
+    val_preds = pd.Series(model.predict(val[FARE_FEATURES]), index=val.index)
+    val_mae = float(mean_absolute_error(val[TARGET], val_preds))
+    val_mape = mape(cast(pd.Series, val[TARGET]), cast(pd.Series, val_preds))
 
     preds = pd.Series(model.predict(test[FARE_FEATURES]), index=test.index)
     model_mae = float(mean_absolute_error(test[TARGET], preds))
@@ -405,7 +561,23 @@ def train_and_save(df: pd.DataFrame) -> dict:
         },
         "xgboost": {
             "train": {"mae": round(train_mae, 4), "mape": round(train_mape, 2)},
+            "validation": {"mae": round(val_mae, 4), "mape": round(val_mape, 2)},
             "test": {"mae": round(model_mae, 4), "mape": round(model_mape, 2)},
+            "continued_training": {
+                "batch_rows": TRAIN_BATCH_ROWS,
+                "init_trees": INIT_TREES,
+                "trees_per_batch": TREES_PER_BATCH,
+                "selected_best_batch": best_batch,
+                "selected_best_val_mae": round(best_val_mae, 4),
+                "history": [
+                    {
+                        "batch": int(item["batch"]),
+                        "val_mae": round(item["val_mae"], 4),
+                        "val_mape": round(item["val_mape"], 2),
+                    }
+                    for item in val_history
+                ],
+            },
         },
         "improvement_mae": round(baseline_mae - model_mae, 4),
     }

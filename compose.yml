@@ -117,8 +117,12 @@ services:
       POSTGRES_JDBC_URL: ${POSTGRES_JDBC_URL:-jdbc:postgresql://postgres:5432/streamcab}
       POSTGRES_USER: ${POSTGRES_USER:-streamcab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamcab}
+      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR:-/opt/streamcab/.spark-checkpoints/traffic_agg}
+      KAFKA_STARTING_OFFSETS: ${KAFKA_STARTING_OFFSETS:-latest}
+      KAFKA_FAIL_ON_DATA_LOSS: ${KAFKA_FAIL_ON_DATA_LOSS:-true}
       MODEL_FILE: ${MODEL_FILE:-/opt/streamcab/models/traffic_model.joblib}
       PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-30}
+      AGG_LOOKBACK_HOURS: ${AGG_LOOKBACK_HOURS:-48}
       ZONE_CENTROIDS_FILE: ${ZONE_CENTROIDS_FILE:-/opt/streamcab/data/reference/zone_centroids.csv}
       STREAMLIT_SERVER_RUN_ON_SAVE: "true"
       STREAMLIT_SERVER_FILE_WATCHER_TYPE: poll
@@ -153,6 +157,7 @@ services:
       KAFKA_CONSUMER_GROUP_ID: ${KAFKA_CONSUMER_GROUP_ID:-streamcab-live-consumer}
       LIVE_TRIPS_INSERT_BATCH_SIZE: ${LIVE_TRIPS_INSERT_BATCH_SIZE:-200}
       LIVE_TRIPS_FLUSH_INTERVAL_SECONDS: ${LIVE_TRIPS_FLUSH_INTERVAL_SECONDS:-1.0}
+      LIVE_TRIPS_RETENTION_MINUTES: ${LIVE_TRIPS_RETENTION_MINUTES:-10}
       DATABASE_URL: ${DATABASE_URL:-postgresql://streamcab:streamcab@postgres:5432/streamcab}
     volumes:
       - ./:/opt/streamcab

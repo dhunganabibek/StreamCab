@@ -1,5 +1,6 @@
 import os
 
+import psycopg
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import (
     avg,
@@ -24,10 +25,11 @@ from pyspark.sql.types import (
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 INPUT_TOPIC = os.getenv("KAFKA_TOPIC", os.getenv("INPUT_TOPIC", "taxi-trips"))
+KAFKA_STARTING_OFFSETS = os.getenv("KAFKA_STARTING_OFFSETS", "latest")
+KAFKA_FAIL_ON_DATA_LOSS = os.getenv("KAFKA_FAIL_ON_DATA_LOSS", "true")
+SPARK_CHECKPOINT_DIR = os.getenv("SPARK_CHECKPOINT_DIR", "/tmp/streamcab-checkpoints/traffic_agg")
 
-POSTGRES_JDBC_URL = os.getenv("POSTGRES_JDBC_URL", "jdbc:postgresql://postgres:5432/streamcab")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "streamcab")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "streamcab")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
 POSTGRES_TABLE = "traffic_agg"
 
 
@@ -60,9 +62,8 @@ def parse_stream(spark: SparkSession) -> DataFrame:
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("subscribe", INPUT_TOPIC)
-        .option("startingOffsets", "earliest")
-        .option("failOnDataLoss", "false")
-        .option("kafka.group.id", "streamcab-spark")
+        .option("startingOffsets", KAFKA_STARTING_OFFSETS)
+        .option("failOnDataLoss", KAFKA_FAIL_ON_DATA_LOSS)
         .load()
     )
 
@@ -128,16 +129,53 @@ def write_batch(batch_df: DataFrame, _: int) -> None:
     if batch_df.isEmpty():
         return
 
-    (
-        batch_df.write.format("jdbc")
-        .option("url", POSTGRES_JDBC_URL)
-        .option("dbtable", POSTGRES_TABLE)
-        .option("user", POSTGRES_USER)
-        .option("password", POSTGRES_PASSWORD)
-        .option("driver", "org.postgresql.Driver")
-        .mode("append")
-        .save()
-    )
+    select_cols = [
+        "window_start",
+        "window_end",
+        "pu_location_id",
+        "trip_count",
+        "avg_speed_mph",
+        "avg_duration_min",
+        "avg_trip_distance",
+        "avg_total_amount",
+        "anomaly_count",
+        "service_date",
+    ]
+    rows = [
+        tuple(r[c] for c in select_cols) for r in batch_df.select(*select_cols).toLocalIterator()
+    ]
+    if not rows:
+        return
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                f"""
+                INSERT INTO {POSTGRES_TABLE} (
+                    window_start,
+                    window_end,
+                    pu_location_id,
+                    trip_count,
+                    avg_speed_mph,
+                    avg_duration_min,
+                    avg_trip_distance,
+                    avg_total_amount,
+                    anomaly_count,
+                    service_date
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (window_start, window_end, pu_location_id)
+                DO UPDATE SET
+                    trip_count = EXCLUDED.trip_count,
+                    avg_speed_mph = EXCLUDED.avg_speed_mph,
+                    avg_duration_min = EXCLUDED.avg_duration_min,
+                    avg_trip_distance = EXCLUDED.avg_trip_distance,
+                    avg_total_amount = EXCLUDED.avg_total_amount,
+                    anomaly_count = EXCLUDED.anomaly_count,
+                    service_date = EXCLUDED.service_date
+                """,
+                rows,
+            )
+        conn.commit()
 
 
 def main() -> None:
@@ -148,6 +186,7 @@ def main() -> None:
 
     query = (
         aggregated.writeStream.outputMode("update")
+        .option("checkpointLocation", SPARK_CHECKPOINT_DIR)
         .foreachBatch(write_batch)
         .trigger(processingTime="2 seconds")
         .start()

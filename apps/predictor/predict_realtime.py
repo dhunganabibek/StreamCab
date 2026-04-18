@@ -21,6 +21,7 @@ _PROJECT_ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
 MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
 PREDICTION_INTERVAL_SECONDS = int(os.getenv("PREDICTION_INTERVAL_SECONDS", "30"))
+AGG_LOOKBACK_HOURS = int(os.getenv("AGG_LOOKBACK_HOURS", "48"))
 
 
 def _to_dt(value: object) -> datetime:
@@ -65,12 +66,21 @@ def load_aggregates() -> pd.DataFrame:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT window_start, window_end, pu_location_id, trip_count,
-                           avg_speed_mph, avg_duration_min, avg_trip_distance,
-                           avg_total_amount, anomaly_count
+                    SELECT DISTINCT ON (pu_location_id)
+                           window_start,
+                           window_end,
+                           pu_location_id,
+                           trip_count,
+                           avg_speed_mph,
+                           avg_duration_min,
+                           avg_trip_distance,
+                           avg_total_amount,
+                           anomaly_count
                     FROM traffic_agg
-                    ORDER BY window_start
-                """
+                    WHERE window_end >= NOW() - (%s * INTERVAL '1 hour')
+                    ORDER BY pu_location_id, window_end DESC, window_start DESC
+                """,
+                    (AGG_LOOKBACK_HOURS,),
                 )
                 rows = cur.fetchall()
     except Exception as ex:
@@ -83,9 +93,7 @@ def load_aggregates() -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["window_start"] = pd.to_datetime(df["window_start"], utc=True, errors="coerce")
     df["window_end"] = pd.to_datetime(df["window_end"], utc=True, errors="coerce")
-    df = df.dropna(subset=["window_start", "window_end"]).sort_values("window_start")
-    # Deduplicate: keep last row per (zone, window) from Spark append mode
-    df = df.drop_duplicates(subset=["pu_location_id", "window_start"], keep="last")
+    df = df.dropna(subset=["window_start", "window_end"]).sort_values("pu_location_id")
     return df
 
 
@@ -144,12 +152,8 @@ def run_prediction_cycle() -> None:
     fare_model = bundle["fare_model"]
     fare_features = bundle["fare_features"]
 
-    # Use the most recent window per zone
-    latest_window_end = aggregates["window_end"].max()
-    rows = cast(
-        pd.DataFrame,
-        aggregates[aggregates["window_end"] == latest_window_end].copy(),
-    )
+    # SQL already returns the latest window row per zone
+    rows = cast(pd.DataFrame, aggregates.copy())
 
     # Build time features
     rows["hour"] = rows["window_start"].dt.hour

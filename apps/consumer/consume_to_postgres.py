@@ -13,6 +13,7 @@ KAFKA_CONSUMER_GROUP_ID = os.getenv("KAFKA_CONSUMER_GROUP_ID", "streamcab-live-c
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
 INSERT_BATCH_SIZE = int(os.getenv("LIVE_TRIPS_INSERT_BATCH_SIZE", "200"))
 INSERT_FLUSH_INTERVAL_SECONDS = float(os.getenv("LIVE_TRIPS_FLUSH_INTERVAL_SECONDS", "1.0"))
+LIVE_TRIPS_RETENTION_MINUTES = int(os.getenv("LIVE_TRIPS_RETENTION_MINUTES", "10"))
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -44,7 +45,7 @@ def build_consumer() -> KafkaConsumer:
         KAFKA_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=KAFKA_CONSUMER_GROUP_ID,
-        enable_auto_commit=True,
+        enable_auto_commit=False,
         auto_offset_reset="earliest",
         consumer_timeout_ms=1000,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -71,6 +72,11 @@ def insert_rows(rows: list[tuple[Any, ...]]) -> None:
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 rows,
+            )
+            # Keep the live table bounded so dashboard reads stay fast.
+            cur.execute(
+                "DELETE FROM live_trips WHERE emitted_at < NOW() - (%s * INTERVAL '1 minute')",
+                (LIVE_TRIPS_RETENTION_MINUTES,),
             )
         conn.commit()
 
@@ -105,6 +111,7 @@ def main() -> None:
 
                 if len(buffer) >= INSERT_BATCH_SIZE:
                     insert_rows(buffer)
+                    consumer.commit()
                     print(f"Inserted {len(buffer)} live trip rows.")
                     buffer.clear()
                     last_flush = time.monotonic()
@@ -113,6 +120,7 @@ def main() -> None:
             now = time.monotonic()
             if buffer and ((now - last_flush) >= INSERT_FLUSH_INTERVAL_SECONDS or not had_messages):
                 insert_rows(buffer)
+                consumer.commit()
                 print(f"Inserted {len(buffer)} live trip rows.")
                 buffer.clear()
                 last_flush = now
@@ -121,6 +129,7 @@ def main() -> None:
     finally:
         if buffer:
             insert_rows(buffer)
+            consumer.commit()
             print(f"Inserted final {len(buffer)} live trip rows.")
         consumer.close()
 
