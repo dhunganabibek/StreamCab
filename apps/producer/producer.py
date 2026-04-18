@@ -4,10 +4,12 @@ advancing timestamps each cycle so the data always looks "live".
 By default it only publishes to Kafka.
 """
 
+import json
 import os
+import random
 import time
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from glob import glob
 from pathlib import Path
 
@@ -115,7 +117,7 @@ def wait_for_kafka() -> KafkaProducer:
         try:
             producer = KafkaProducer(
                 bootstrap_servers=BOOTSTRAP_SERVERS,
-                value_serializer=lambda v: __import__("json").dumps(v).encode("utf-8"),
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                 linger_ms=20,
                 acks=1,
             )
@@ -267,17 +269,15 @@ def to_event(row: dict[str, str]) -> dict:
         "pu_location_id": int(float(row["PULocationID"] or 0)),
         "do_location_id": int(float(row["DOLocationID"] or 0)),
         "total_amount": float(row["total_amount"] or 0),
-        "emitted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "emitted_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
 #  Synthetic fallback
 def synthetic_rows() -> Iterable[dict[str, str]]:
-    import random
-
     zones = [132, 138, 161, 186, 230, 234, 237, 48, 68, 79, 113, 170, 249]
     while True:
-        pickup = datetime.utcnow() - timedelta(seconds=random.randint(0, 120))
+        pickup = datetime.now(UTC) - timedelta(seconds=random.randint(0, 120))
         duration = random.randint(5, 35)
         distance = round(random.uniform(1.2, 10.2), 2)
         yield {

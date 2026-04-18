@@ -4,6 +4,8 @@ data/raw
 data/checkpoints/*
 data/processed/*
 
+.spark-checkpoints
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -217,7 +219,7 @@ __marimo__/
 .DS_Store
 **/.DS_Store
 
-# Latex related files
+# Latex build artifacts
 *.aux
 *.nav
 *.out
@@ -228,4 +230,6 @@ __marimo__/
 *.log
 *.fdb_latexmk
 *.sty
+*.synctex.gz
+~$*.pptx
 *.synctex.gz

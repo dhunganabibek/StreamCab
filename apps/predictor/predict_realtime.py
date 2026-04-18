@@ -1,8 +1,8 @@
 """
 Every PREDICTION_INTERVAL_SECONDS:
-  - Load latest Spark aggregates from Postgres
-  - Run XGBoost fare predictor per pickup zone
-  - Write predictions back to Postgres
+  Load latest Spark aggregates from Postgres
+  Run XGBoost tip predictor per pickup zone
+  Write predictions back to Postgres
 """
 
 import os
@@ -19,7 +19,7 @@ import psycopg.rows
 _PROJECT_ROOT = Path(__file__).parents[2]
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
-MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
+MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/tip_model.joblib")))
 PREDICTION_INTERVAL_SECONDS = int(os.getenv("PREDICTION_INTERVAL_SECONDS", "30"))
 AGG_LOOKBACK_HOURS = int(os.getenv("AGG_LOOKBACK_HOURS", "48"))
 
@@ -66,19 +66,25 @@ def load_aggregates() -> pd.DataFrame:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT ON (pu_location_id)
-                           window_start,
-                           window_end,
-                           pu_location_id,
-                           trip_count,
-                           avg_speed_mph,
-                           avg_duration_min,
-                           avg_trip_distance,
-                           avg_total_amount,
-                           anomaly_count
-                    FROM traffic_agg
-                    WHERE window_end >= NOW() - (%s * INTERVAL '1 hour')
-                    ORDER BY pu_location_id, window_end DESC, window_start DESC
+                    WITH latest AS (
+                        SELECT MAX(window_end) AS max_window_end
+                        FROM traffic_agg
+                    )
+                    SELECT DISTINCT ON (t.pu_location_id)
+                           t.window_start,
+                           t.window_end,
+                           t.pu_location_id,
+                           t.trip_count,
+                           t.avg_speed_mph,
+                           t.avg_duration_min,
+                           t.avg_trip_distance,
+                           t.avg_total_amount,
+                           t.anomaly_count
+                    FROM traffic_agg AS t
+                    CROSS JOIN latest AS l
+                    WHERE l.max_window_end IS NOT NULL
+                      AND t.window_end >= l.max_window_end - (%s * INTERVAL '1 hour')
+                    ORDER BY t.pu_location_id, t.window_end DESC, t.window_start DESC
                 """,
                     (AGG_LOOKBACK_HOURS,),
                 )
@@ -149,24 +155,36 @@ def run_prediction_cycle() -> None:
         return
 
     bundle = joblib.load(MODEL_FILE)
-    fare_model = bundle["fare_model"]
-    fare_features = bundle["fare_features"]
+    tip_model = bundle.get("tip_model") or bundle.get("fare_model")
+    tip_features = bundle.get("tip_features") or bundle.get("fare_features")
+    if tip_model is None or tip_features is None:
+        print("Model bundle missing model/features keys. Waiting...")
+        return
 
     # SQL already returns the latest window row per zone
-    rows = cast(pd.DataFrame, aggregates.copy())
+    rows = aggregates.copy()
 
     # Build time features
     rows["hour"] = rows["window_start"].dt.hour
     rows["day_of_week"] = rows["window_start"].dt.dayofweek
     rows["is_weekend"] = (rows["day_of_week"] >= 5).astype(int)
 
-    for col in fare_features:
+    for col in tip_features:
         if col not in rows.columns:
             rows[col] = 0
 
-    rows["predicted_avg_fare"] = fare_model.predict(rows[fare_features]).clip(min=0).round(2)
-    rows["predicted_tip_low"] = (rows["predicted_avg_fare"] * 0.15).round(2)
-    rows["predicted_tip_high"] = (rows["predicted_avg_fare"] * 0.20).round(2)
+    tip_pred = pd.Series(tip_model.predict(rows[tip_features]), index=rows.index).clip(lower=0)
+    rows["predicted_tip_low"] = (tip_pred * 0.9).round(2)
+    rows["predicted_tip_high"] = (tip_pred * 1.1).round(2)
+
+    if "avg_total_amount" in rows.columns:
+        avg_total_amount = cast(
+            pd.Series,
+            pd.to_numeric(rows["avg_total_amount"], errors="coerce"),
+        )
+        rows["predicted_avg_fare"] = avg_total_amount.fillna(0).clip(lower=0).round(2)
+    else:
+        rows["predicted_avg_fare"] = (tip_pred * 5).round(2)
 
     median_trips = float(rows["trip_count"].median()) if "trip_count" in rows.columns else 1.0
     if median_trips > 0 and "trip_count" in rows.columns:
@@ -201,9 +219,11 @@ def run_prediction_cycle() -> None:
     )
 
     write_predictions(output)
+    max_tip = output[["predicted_tip_low", "predicted_tip_high"]].max(axis=1).max()
     print(
         f"Predictions written: {len(output)} zones | "
         f"max fare ${output['predicted_avg_fare'].max():.2f} | "
+        f"max tip ${max_tip:.2f} | "
         f"max surge {output['surge_multiplier'].max():.2f}x"
     )
 

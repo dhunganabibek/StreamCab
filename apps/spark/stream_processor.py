@@ -33,6 +33,37 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postg
 POSTGRES_TABLE = "traffic_agg"
 
 
+def ensure_postgres_indexes() -> None:
+    """Ensure upsert target has a unique index even on pre-existing databases."""
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            # Older database volumes may already contain duplicate aggregate keys.
+            # Remove duplicates before enforcing uniqueness for ON CONFLICT upserts.
+            cur.execute(
+                """
+                WITH ranked AS (
+                    SELECT ctid,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY window_start, window_end, pu_location_id
+                               ORDER BY ctid
+                           ) AS rn
+                    FROM traffic_agg
+                )
+                DELETE FROM traffic_agg t
+                USING ranked r
+                WHERE t.ctid = r.ctid
+                  AND r.rn > 1
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS traffic_agg_unique_idx
+                ON traffic_agg (window_start, window_end, pu_location_id)
+                """
+            )
+        conn.commit()
+
+
 def build_session() -> SparkSession:
     return (
         SparkSession.builder.appName("streamcab-traffic-pipeline")
@@ -179,6 +210,7 @@ def write_batch(batch_df: DataFrame, _: int) -> None:
 
 
 def main() -> None:
+    ensure_postgres_indexes()
     spark = build_session()
     parsed = parse_stream(spark)
     cleaned = clean_stream(parsed)

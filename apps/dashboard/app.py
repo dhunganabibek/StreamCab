@@ -21,7 +21,7 @@ except Exception:
 _PROJECT_ROOT = Path(__file__).parents[2]
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postgres:5432/streamcab")
-MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/traffic_model.joblib")))
+MODEL_FILE = Path(os.getenv("MODEL_FILE", str(_PROJECT_ROOT / "models/tip_model.joblib")))
 ZONE_CENTROIDS_FILE = Path(
     os.getenv("ZONE_CENTROIDS_FILE", str(_PROJECT_ROOT / "data/reference/zone_centroids.csv"))
 )
@@ -29,6 +29,7 @@ ZONE_CENTROIDS_FILE = Path(
 TRIP_REFRESH = 3  # seconds — left panel refreshes
 MAP_REFRESH = 15  # seconds — map refreshes
 LIVE_SAMPLE_LIMIT = int(os.getenv("LIVE_SAMPLE_LIMIT", "200"))
+PANEL_HEIGHT_PX = int(os.getenv("PANEL_HEIGHT_PX", "430"))
 
 
 def _connect_dict() -> Any:
@@ -150,7 +151,7 @@ st.markdown(
 [data-testid="stAppViewContainer"] {
     background: #f8fafc;
 }
-.block-container { padding: 1rem 1.6rem 0.8rem; max-width: 1500px; }
+.block-container { padding: 0.6rem 1.2rem 0.4rem; max-width: 100%; }
 [data-testid="stVerticalBlock"] > [style*="flex-direction: column"] > [data-testid="stVerticalBlock"] {
     gap: 0.5rem;
 }
@@ -249,8 +250,6 @@ hr { margin: 0.35rem 0 0.45rem 0 !important; }
 
 
 # Static data (loaded once)
-
-
 model_bundle = load_model()
 centroids = load_zone_centroids()
 
@@ -270,14 +269,37 @@ def zone_label(zone_id: int) -> str:
     return name if name else f"Unknown Zone {zone_id}"
 
 
+def _coerce_trips(raw: pd.DataFrame) -> pd.DataFrame:
+    """Normalise column types from the live_trips query result."""
+    if raw.empty:
+        return raw
+    trips = raw.copy()
+    trips["total_amount"] = _num_series(trips.get("total_amount", pd.Series(0, index=trips.index)))
+    trips["trip_distance"] = _num_series(
+        trips.get("trip_distance", pd.Series(0, index=trips.index))
+    )
+    trips["pu_location_id"] = _num_series(
+        trips.get("pu_location_id", pd.Series(0, index=trips.index))
+    ).astype(int)
+    trips["do_location_id"] = _num_series(
+        trips.get("do_location_id", pd.Series(0, index=trips.index))
+    ).astype(int)
+    trips["emitted_at"] = _dt_series(trips.get("emitted_at", pd.Series(pd.NaT, index=trips.index)))
+    trips["pickup_name"] = trips["pu_location_id"].map(zone_label)
+    trips["dropoff_name"] = trips["do_location_id"].map(zone_label)
+    return trips
+
+
 @st.cache_data(ttl=TRIP_REFRESH)
 def predict_trip_fares(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> pd.Series:
-    """Predict fare per trip using the trained model features."""
+    """Predict tip per trip using the trained model features."""
     if _trips.empty or _model_bundle is None:
         return pd.Series(dtype=float)
 
-    fare_model = _model_bundle["fare_model"]
-    fare_features = _model_bundle["fare_features"]
+    tip_model = _model_bundle.get("tip_model") or _model_bundle.get("fare_model")
+    tip_features = _model_bundle.get("tip_features") or _model_bundle.get("fare_features")
+    if tip_model is None or tip_features is None:
+        return pd.Series(dtype=float)
 
     t = _trips.copy()
     pickup_col = (
@@ -314,11 +336,11 @@ def predict_trip_fares(_model_bundle, trips_hash: str, _trips: pd.DataFrame) -> 
     model_df["avg_speed_mph"] = t["avg_speed_mph"]
     model_df["trip_count"] = t["trip_count"]
 
-    for col in fare_features:
+    for col in tip_features:
         if col not in model_df.columns:
             model_df[col] = 0
 
-    preds = fare_model.predict(cast(pd.DataFrame, model_df[fare_features])).clip(min=0)
+    preds = tip_model.predict(cast(pd.DataFrame, model_df[tip_features])).clip(min=0)
     return pd.Series(preds, index=t.index, dtype=float)
 
 
@@ -344,38 +366,8 @@ st.divider()
 # LEFT Portion — trips + zone rankings, refreshes every TRIP_REFRESH seconds
 @st.fragment(run_every=TRIP_REFRESH)
 def live_panel():
-    live_raw = load_live_trips()
+    trips = _coerce_trips(load_live_trips())
     trips_per_min = load_trips_per_minute()
-
-    trips = pd.DataFrame()
-    if not live_raw.empty:
-        trips = live_raw.copy()
-        total_amount_col = (
-            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
-        )
-        trip_distance_col = (
-            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
-        )
-        pu_col = (
-            trips["pu_location_id"]
-            if "pu_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        )
-        do_col = (
-            trips["do_location_id"]
-            if "do_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        )
-        emitted_col = (
-            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
-        )
-        trips["total_amount"] = _num_series(total_amount_col)
-        trips["trip_distance"] = _num_series(trip_distance_col)
-        trips["pu_location_id"] = _num_series(pu_col).astype(int)
-        trips["do_location_id"] = _num_series(do_col).astype(int)
-        trips["emitted_at"] = _dt_series(emitted_col)
-        trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
-        trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
 
     # Zone predictions come from the predictor service via Postgres
     zone_preds = load_predictions()
@@ -401,12 +393,14 @@ def live_panel():
         else:
             k5.metric("Max Surge", "—")
 
-    st.markdown('<div class="section-title">Pickup Zones</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Pickup Zones (Top 6 Predicted)</div>',
+        unsafe_allow_html=True,
+    )
     if zone_preds.empty:
-        st.info(
-            "Waiting for predictor — run `docker compose run --rm train-once` first if model is missing."
-        )
+        st.info("Waiting for zone predictions. Stream data is still warming up.")
     else:
+        st.caption("Shows top 6 predicted pickup zones right now (not all zones).")
         medals = ["1", "2", "3", "4", "5", "6"]
         html = '<div class="zone-grid">'
         for rank, row in enumerate(zone_preds.head(6).to_dict(orient="records")):
@@ -441,40 +435,14 @@ def live_panel():
 
 @st.fragment(run_every=TRIP_REFRESH)
 def trips_panel():
-    live_raw = load_live_trips()
+    trips = _coerce_trips(load_live_trips())
 
-    trips = pd.DataFrame()
-    if not live_raw.empty:
-        trips = live_raw.copy()
-        trips["total_amount"] = _num_series(
-            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
-        )
-        trips["trip_distance"] = _num_series(
-            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
-        )
-        trips["pu_location_id"] = _num_series(
-            trips["pu_location_id"]
-            if "pu_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        ).astype(int)
-        trips["do_location_id"] = _num_series(
-            trips["do_location_id"]
-            if "do_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        ).astype(int)
-        trips["emitted_at"] = _dt_series(
-            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
-        )
-        trips["pickup_name"] = trips["pu_location_id"].astype(int).map(zone_label)
-        trips["dropoff_name"] = trips["do_location_id"].astype(int).map(zone_label)
-
+    if not trips.empty:
         if model_bundle is not None:
             trips_hash = str(len(trips)) + str(trips["pu_location_id"].sum())
-            trip_pred_fares = predict_trip_fares(model_bundle, trips_hash + "_tbl", trips)
-            trip_pred_num = _num_series(trip_pred_fares)
-            trips["model_tip"] = (
-                (trip_pred_num * 0.18).round(2) if not trip_pred_fares.empty else np.nan
-            )
+            trip_pred_tips = predict_trip_fares(model_bundle, trips_hash + "_tbl", trips)
+            trip_pred_num = _num_series(trip_pred_tips)
+            trips["model_tip"] = trip_pred_num.round(2) if not trip_pred_tips.empty else np.nan
         else:
             trips["model_tip"] = np.nan
 
@@ -503,7 +471,7 @@ def trips_panel():
             display_df,
             use_container_width=True,
             hide_index=True,
-            height=320,
+            height=PANEL_HEIGHT_PX,
             column_config={
                 "Time": st.column_config.TextColumn("Time", width="small"),
                 "Pickup": st.column_config.TextColumn("Pickup"),
@@ -521,34 +489,7 @@ def trips_panel():
 # RIGHT portion — map, refreshes every MAP_REFRESH seconds
 @st.fragment(run_every=MAP_REFRESH)
 def map_panel():
-    live_raw = load_live_trips()
-    trips = pd.DataFrame()
-    if not live_raw.empty:
-        trips = live_raw.copy()
-        total_amount_col = (
-            trips["total_amount"] if "total_amount" in trips else pd.Series(0, index=trips.index)
-        )
-        trip_distance_col = (
-            trips["trip_distance"] if "trip_distance" in trips else pd.Series(0, index=trips.index)
-        )
-        pu_col = (
-            trips["pu_location_id"]
-            if "pu_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        )
-        do_col = (
-            trips["do_location_id"]
-            if "do_location_id" in trips
-            else pd.Series(0, index=trips.index)
-        )
-        emitted_col = (
-            trips["emitted_at"] if "emitted_at" in trips else pd.Series(pd.NaT, index=trips.index)
-        )
-        trips["total_amount"] = _num_series(total_amount_col)
-        trips["trip_distance"] = _num_series(trip_distance_col)
-        trips["pu_location_id"] = _num_series(pu_col).astype(int)
-        trips["do_location_id"] = _num_series(do_col).astype(int)
-        trips["emitted_at"] = _dt_series(emitted_col)
+    trips = _coerce_trips(load_live_trips())
 
     st.markdown("### City Map — All Stations & Most Popular")
 
@@ -670,7 +611,7 @@ def map_panel():
             "uirevision": "city-map-lock",
         },
         margin={"t": 0, "b": 0},
-        height=310,
+        height=PANEL_HEIGHT_PX,
         legend={"orientation": "h", "y": 1.02, "x": 0},
     )
     st.plotly_chart(fig_map, use_container_width=True, key="city_map_chart")
@@ -701,7 +642,7 @@ def map_panel():
 # Render fragments
 live_panel()
 
-col_left, col_right = st.columns([1, 1.35], gap="large")
+col_left, col_right = st.columns([1, 1], gap="medium")
 with col_left:
     trips_panel()
 with col_right:
