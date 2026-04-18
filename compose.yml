@@ -1,6 +1,29 @@
+name: stream_cab
+
 services:
+  # Infrastructure
+  postgres:
+    image: postgres:16-alpine
+    container_name: streamcab-postgres
+    environment:
+      POSTGRES_DB: streamcab
+      POSTGRES_USER: streamcab
+      POSTGRES_PASSWORD: streamcab
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamcab"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   kafka:
-    image: confluentinc/cp-kafka:7.6.1
+    build:
+      context: .
+      dockerfile: apps/producer/Dockerfile
     container_name: streamcab-kafka
     ports:
       - "9092:9092"
@@ -17,8 +40,34 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-taxi-trips}
+      DATA_DIR: /opt/streamcab/data/raw-data/parquet
+      REPLAY_SLEEP_SECONDS: ${REPLAY_SLEEP_SECONDS:-2.5}
+      WRITE_LIVE_TRIPS_FROM_PRODUCER: ${WRITE_LIVE_TRIPS_FROM_PRODUCER:-false}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://streamcab:streamcab@postgres:5432/streamcab}
+      ZONE_CENTROIDS_FILE: ${ZONE_CENTROIDS_FILE:-/opt/streamcab/data/reference/zone_centroids.csv}
+    volumes:
+      - ./:/opt/streamcab
+      - ${RAW_DATA_HOST_PATH:-./data/raw-data}:/opt/streamcab/data/raw-data
+      - kafka_data:/var/lib/kafka/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -lc '
+      /etc/confluent/docker/run &
+      KAFKA_PID=$$!;
+      until /usr/bin/kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1; do
+        echo "Kafka not ready yet, waiting...";
+        sleep 2;
+      done;
+      python -u /opt/streamcab/apps/producer/producer.py &
+      PRODUCER_PID=$$!;
+      wait -n "$$KAFKA_PID" "$$PRODUCER_PID"
+      '
     healthcheck:
       test:
         [
@@ -30,20 +79,6 @@ services:
       interval: 10s
       timeout: 8s
       retries: 12
-
-  init-kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: streamcab-init-kafka
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ["/bin/bash", "-c"]
-    command: >
-      '
-      /usr/bin/kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists
-      --topic ${KAFKA_TOPIC:-taxi-trips} --partitions 1 --replication-factor 1;
-      /usr/bin/kafka-topics --bootstrap-server kafka:29092 --list;
-      '
 
   control-center:
     image: confluentinc/cp-enterprise-control-center:7.6.1
@@ -60,55 +95,85 @@ services:
       CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
       CONFLUENT_METRICS_TOPIC_REPLICATION: 1
       PORT: 9021
-      # Disable optional integrations we're not running — prevents Connection refused spam
-      CONTROL_CENTER_SCHEMA_REGISTRY_URL: ""
       CONTROL_CENTER_KSQL_ENABLE: "false"
-      CONTROL_CENTER_CONNECT_CLUSTER: ""
 
-  producer:
-    build: { context: ., dockerfile: Dockerfile, target: producer }
-    container_name: streamcab-producer
+  # App runtime
+  app:
+    build:
+      context: .
+      dockerfile: apps/app/Dockerfile
+    container_name: streamcab-app
     depends_on:
-      init-kafka:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
       KAFKA_TOPIC: ${KAFKA_TOPIC:-taxi-trips}
-      DATA_DIR: ${RAW_DATA_DIR:-/opt/streamcab/data/raw-data/parquet}
-      REPLAY_SLEEP_SECONDS: ${REPLAY_SLEEP_SECONDS:-2.5}
-      LIVE_LOG_FILE: ${LIVE_LOG_FILE:-/opt/streamcab/models/live_trips.json}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://streamcab:streamcab@postgres:5432/streamcab}
+      POSTGRES_JDBC_URL: ${POSTGRES_JDBC_URL:-jdbc:postgresql://postgres:5432/streamcab}
+      POSTGRES_USER: ${POSTGRES_USER:-streamcab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamcab}
+      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR:-/opt/streamcab/.spark-checkpoints/traffic_agg}
+      KAFKA_STARTING_OFFSETS: ${KAFKA_STARTING_OFFSETS:-latest}
+      KAFKA_FAIL_ON_DATA_LOSS: ${KAFKA_FAIL_ON_DATA_LOSS:-true}
+      MODEL_FILE: ${MODEL_FILE:-/opt/streamcab/models/traffic_model.joblib}
+      PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-30}
+      AGG_LOOKBACK_HOURS: ${AGG_LOOKBACK_HOURS:-48}
       ZONE_CENTROIDS_FILE: ${ZONE_CENTROIDS_FILE:-/opt/streamcab/data/reference/zone_centroids.csv}
-    volumes:
-      - ./:/opt/streamcab
-      - ${RAW_DATA_HOST_PATH:-./data/raw-data}:/opt/streamcab/data/raw-data
-
-  spark-streaming:
-    image: apache/spark:3.5.1
-    container_name: streamcab-spark-streaming
-    user: "0:0"
-    depends_on:
-      init-kafka:
-        condition: service_completed_successfully
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
-      INPUT_TOPIC: ${KAFKA_TOPIC:-taxi-trips}
-      CHECKPOINT_DIR: ${CHECKPOINT_DIR:-/opt/streamcab/data/checkpoints/traffic_agg}
-      OUTPUT_DIR: ${AGGREGATE_DIR:-/opt/streamcab/data/processed/traffic_agg}
+      STREAMLIT_SERVER_RUN_ON_SAVE: "true"
+      STREAMLIT_SERVER_FILE_WATCHER_TYPE: poll
     volumes:
       - ./:/opt/streamcab
     command: >
-      /opt/spark/bin/spark-submit
-      --master local[*]
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-      /opt/streamcab/apps/spark/stream_processor.py
+      bash -lc '
+      spark-submit --master local[*]
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3
+      /opt/streamcab/apps/spark/stream_processor.py &
+      SPARK_PID=$$!;
+      python -u /opt/streamcab/apps/predictor/predict_realtime.py &
+      PREDICTOR_PID=$$!;
+      streamlit run /opt/streamcab/apps/dashboard/app.py --server.port=8501 --server.address=0.0.0.0 &
+      DASHBOARD_PID=$$!;
+      wait -n "$$SPARK_PID" "$$PREDICTOR_PID" "$$DASHBOARD_PID"
+      '
 
+  consumer:
+    build:
+      context: .
+      dockerfile: apps/app/Dockerfile
+    container_name: streamcab-consumer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-taxi-trips}
+      KAFKA_CONSUMER_GROUP_ID: ${KAFKA_CONSUMER_GROUP_ID:-streamcab-live-consumer}
+      LIVE_TRIPS_INSERT_BATCH_SIZE: ${LIVE_TRIPS_INSERT_BATCH_SIZE:-200}
+      LIVE_TRIPS_FLUSH_INTERVAL_SECONDS: ${LIVE_TRIPS_FLUSH_INTERVAL_SECONDS:-1.0}
+      LIVE_TRIPS_RETENTION_MINUTES: ${LIVE_TRIPS_RETENTION_MINUTES:-10}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://streamcab:streamcab@postgres:5432/streamcab}
+    volumes:
+      - ./:/opt/streamcab
+    command: >
+      python -u /opt/streamcab/apps/consumer/consume_to_postgres.py
+
+  # One-shot / Manual Training
   # Usage: docker compose run --rm train-once
   train-once:
-    build: { context: ., dockerfile: Dockerfile, target: trainer }
+    build:
+      context: .
+      dockerfile: apps/trainer/Dockerfile
     container_name: streamcab-train-once
     environment:
+      # Local path by default; can be overridden to s3://... for training.
       RAW_DATA_DIR: ${RAW_DATA_DIR:-/opt/streamcab/data/raw-data/parquet}
-      MODEL_OUTPUT_DIR: ${MODEL_OUTPUT_DIR:-/opt/streamcab/models}
       ZONE_CENTROIDS_FILE: ${ZONE_CENTROIDS_FILE:-/opt/streamcab/data/reference/zone_centroids.csv}
       MAX_FILES: ${MAX_FILES:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
@@ -122,36 +187,6 @@ services:
     profiles:
       - manual
 
-  predictor:
-    build: { context: ., dockerfile: Dockerfile, target: predictor }
-    container_name: streamcab-predictor
-    environment:
-      AGGREGATE_DIR: ${AGGREGATE_DIR:-/opt/streamcab/data/processed/traffic_agg}
-      MODEL_FILE: ${MODEL_FILE:-/opt/streamcab/models/traffic_model.joblib}
-      PREDICTIONS_FILE: ${PREDICTIONS_FILE:-/opt/streamcab/models/realtime_predictions.parquet}
-      PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-30}
-    volumes:
-      - ./:/opt/streamcab
-      - ${RAW_DATA_HOST_PATH:-./data/raw-data}:/opt/streamcab/data/raw-data
-
-  dashboard:
-    build: { context: ., dockerfile: Dockerfile, target: dashboard }
-    container_name: streamcab-dashboard
-    depends_on:
-      spark-streaming:
-        condition: service_started
-    ports:
-      - "8501:8501"
-    environment:
-      AGGREGATE_DIR: ${AGGREGATE_DIR:-/opt/streamcab/data/processed/traffic_agg}
-      RAW_DATA_DIR: ${RAW_DATA_DIR:-/opt/streamcab/data/raw-data/parquet}
-      METRICS_FILE: ${METRICS_FILE:-/opt/streamcab/models/metrics.json}
-      PREDICTIONS_FILE: ${PREDICTIONS_FILE:-/opt/streamcab/models/realtime_predictions.parquet}
-      MODEL_FILE: ${MODEL_FILE:-/opt/streamcab/models/traffic_model.joblib}
-      LIVE_LOG_FILE: ${LIVE_LOG_FILE:-/opt/streamcab/models/live_trips.json}
-      ZONE_CENTROIDS_FILE: ${ZONE_CENTROIDS_FILE:-/opt/streamcab/data/reference/zone_centroids.csv}
-      STREAMLIT_SERVER_RUN_ON_SAVE: "true"
-      STREAMLIT_SERVER_FILE_WATCHER_TYPE: poll
-    volumes:
-      - ./:/opt/streamcab
-      - ${RAW_DATA_HOST_PATH:-./data/raw-data}:/opt/streamcab/data/raw-data
+volumes:
+  postgres_data:
+  kafka_data:

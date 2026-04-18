@@ -5,13 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "streamcab"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.11,<3.14"
 
 [project.optional-dependencies]
 producer = [
     "kafka-python==2.0.2",
     "pandas==2.2.2",
     "pyarrow==16.1.0",
+    "psycopg[binary]>=3.1",
 ]
 dashboard = [
     "streamlit==1.37.1",
@@ -22,6 +23,7 @@ dashboard = [
     "joblib==1.4.2",
     "xgboost==2.1.1",
     "numpy>=1.26",
+    "psycopg[binary]>=3.1",
 ]
 trainer = [
     "pandas==2.2.2",
@@ -33,9 +35,9 @@ trainer = [
 ]
 predictor = [
     "pandas==2.2.2",
-    "pyarrow==16.1.0",
     "joblib==1.4.2",
     "xgboost==2.1.1",
+    "psycopg[binary]>=3.1",
 ]
 scripts = [
     "httpx>=0.27",
@@ -65,3 +67,8 @@ pythonVersion = "3.11"
 typeCheckingMode = "basic"
 include = ["apps", "scripts"]
 exclude = ["**/__pycache__", "data"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+]

@@ -216,3 +216,16 @@ __marimo__/
 
 .DS_Store
 **/.DS_Store
+
+# Latex related files
+*.aux
+*.nav
+*.out
+*.toc
+*.snm
+*.fls
+*.lof
+*.log
+*.fdb_latexmk
+*.sty
+*.synctex.gz
