@@ -1,3 +1,4 @@
+% !TeX program = lualatex
 \documentclass[aspectratio=169,professionalfonts]{beamer}
 
 \usetheme{metropolis}
@@ -24,7 +25,7 @@
 \title{StreamCab}
 \subtitle{Real-Time Taxi Fare Intelligence\\Kafka · Spark Structured Streaming · XGBoost}
 \author{ Bibek Dhungana, Xiaodi Shao, Raivath Mallela}
-\institute{Data Engineering}
+\institute{Big Data Application}
 \date{\today}
 
 \begin{document}
@@ -32,7 +33,7 @@
 \maketitle
 
 % Agenda 
-\begin{frame}{Agenda (12 min + 3 min Q\&A)}
+\begin{frame}{Agenda}
 \begin{enumerate}
   \item \textbf{Overview} — problem statement and system architecture
   \item \textbf{Data} — source, collection, schema, and metadata
@@ -54,7 +55,7 @@ NYC taxi demand and pricing shift rapidly by zone and time.
 \begin{itemize}
   \item Static batch reports lag behind operational decisions.
   \item No live view of which zones are surging right now.
-  \item Fare prediction from historical patterns alone is too slow.
+  \item Tip prediction from historical patterns alone is too slow.
 \end{itemize}
 
 \vspace{0.8em}
@@ -297,22 +298,18 @@ signals (weather/events), quantile outputs, cloud-scale deployment.
 
 \begin{frame}{Submission Checklist}
 \begin{itemize}
-  \item[$\checkmark$] GitHub repo with README walkthrough (data input $\to$ final output)
-  \item[$\checkmark$] Public data source: \texttt{nyc.gov/site/tlc/about/tlc-trip-record-data.page}
-  \item[$\checkmark$] Final report in IEEE research paper style (6--8 pages)
+  \item[$\checkmark$] \textbf{Code Links:} \url{https://github.com/dhunganabibek/StreamCab}
+  \item[$\checkmark$] \textbf{Data source:} \url{www.nyc.gov/site/tlc/about/tlc-trip-record-data.page}
+  \item[$\checkmark$] Final report in IEEE research paper style
   \item[$\checkmark$] Abstract, Introduction, Related Work, Architecture, Data, Results, Conclusion
   \item[$\checkmark$] Presentation covers all five required sections
-  \item[$\checkmark$] Brief intro to tools not in class (Kafka, Spark Streaming, psycopg, XGBoost)
-  \item[$\circ$] \alert{Add all group member names to report and presentation}
 \end{itemize}
 \end{frame}
 
-\begin{frame}[standout]
-Questions?
-
-\vspace{0.5em}
-\normalsize
-\texttt{github.com/dhunganabibek/StreamCab}
+\begin{frame}
+  \centering
+  \Huge Questions?\\[0.8em]
+  \Large Thank you.
 \end{frame}
 
 \end{document}
