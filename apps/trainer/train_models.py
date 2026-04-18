@@ -1,5 +1,5 @@
 """
-Train a single XGBoost fare predictor from NYC  taxi data.
+Train an XGBoost tip predictor from NYC taxi data.
 Reads raw parquet files, trains on 80% of data, saves the model, and exits.
 Run once before starting the live pipeline:
 
@@ -68,8 +68,8 @@ WINDOW_SIZE = pd.Timedelta(minutes=10)
 _NYC_LAT = (40.4, 41.0)
 _NYC_LON = (-74.5, -73.5)
 
-# Features used by the fare predictor
-FARE_FEATURES = [
+# Features used by the tip predictor
+TIP_FEATURES = [
     "pu_location_id",
     "hour",
     "day_of_week",
@@ -79,7 +79,7 @@ FARE_FEATURES = [
     "avg_speed_mph",
     "trip_count",
 ]
-TARGET = "avg_total_amount"
+TARGET = "avg_tip_amount"
 
 _AGG_KEYS = ["window_start", "window_end", "pu_location_id"]
 _AGG_SUM_COLS = [
@@ -87,7 +87,7 @@ _AGG_SUM_COLS = [
     "trip_distance_sum",
     "duration_min_sum",
     "speed_mph_sum",
-    "total_amount_sum",
+    "tip_amount_sum",
 ]
 
 
@@ -147,6 +147,7 @@ def _needed_columns(file_cols: set[str]) -> list[str] | None:
     dropoff = next((c for c in _DROPOFF_CANDIDATES if c in file_cols), None)
     distance = "trip_distance" if "trip_distance" in file_cols else None
     amount = next((c for c in ["total_amount", "fare_amount"] if c in file_cols), None)
+    tip = "tip_amount" if "tip_amount" in file_cols else None
     location = next((c for c in _LOCATION_CANDIDATES if c in file_cols), None)
     has_latlon = "pickup_latitude" in file_cols and "pickup_longitude" in file_cols
 
@@ -157,6 +158,8 @@ def _needed_columns(file_cols: set[str]) -> list[str] | None:
         pickup is not None and dropoff is not None and distance is not None and amount is not None
     )
     cols: list[str] = [pickup, dropoff, distance, amount]
+    if tip:
+        cols.append(tip)
     if location:
         cols.append(location)
     else:
@@ -174,6 +177,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
     dropoff_col = _first_col(raw, _DROPOFF_CANDIDATES)
     distance_col = _first_col(raw, ["trip_distance"])
     amount_col = _first_col(raw, ["total_amount", "fare_amount"])
+    tip_col = _first_col(raw, ["tip_amount"])
     location_col = _first_col(raw, _LOCATION_CANDIDATES)
     lat_col = _first_col(raw, ["pickup_latitude"])
     lon_col = _first_col(raw, ["pickup_longitude"])
@@ -188,6 +192,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
             ("dropoff", dropoff_col),
             ("distance", distance_col),
             ("amount", amount_col),
+            ("tip", tip_col),
         ]
         if c is None
     ]
@@ -203,6 +208,8 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
     dropoff_ts = cast(pd.Series, pd.to_datetime(raw[dropoff_col], errors="coerce"))
     trip_distance = cast(pd.Series, pd.to_numeric(raw[distance_col], errors="coerce"))
     total_amount = cast(pd.Series, pd.to_numeric(raw[amount_col], errors="coerce"))
+    assert tip_col is not None
+    tip_amount = cast(pd.Series, pd.to_numeric(raw[tip_col], errors="coerce"))
     duration_min = cast(pd.Series, (dropoff_ts - pickup_ts).dt.total_seconds() / 60)
     speed_mph = cast(pd.Series, trip_distance / (duration_min / 60).replace(0, float("nan")))
 
@@ -244,6 +251,9 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
         & location_mask
         & (total_amount > 0)
         & (total_amount < 500)
+        & tip_amount.notna()
+        & (tip_amount >= 0)
+        & (tip_amount < 100)
     )
 
     # Assemble only the rows that pass the filter — one small DataFrame instead
@@ -261,7 +271,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
             "trip_distance": cast(pd.Series, trip_distance[idx]).to_numpy(),
             "duration_min": cast(pd.Series, duration_min[idx]).to_numpy(),
             "speed_mph": cast(pd.Series, speed_mph[idx]).to_numpy(),
-            "total_amount": cast(pd.Series, total_amount[idx]).to_numpy(),
+            "tip_amount": cast(pd.Series, tip_amount[idx]).to_numpy(),
         }
     )
     del (
@@ -269,6 +279,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
         dropoff_ts,
         trip_distance,
         total_amount,
+        tip_amount,
         duration_min,
         speed_mph,
         pu_location_id,
@@ -282,7 +293,7 @@ def _aggregate_chunk(raw: pd.DataFrame, fname: str = "") -> pd.DataFrame:
             trip_distance_sum=("trip_distance", "sum"),
             duration_min_sum=("duration_min", "sum"),
             speed_mph_sum=("speed_mph", "sum"),
-            total_amount_sum=("total_amount", "sum"),
+            tip_amount_sum=("tip_amount", "sum"),
         )
         .reset_index()
     )
@@ -315,7 +326,7 @@ def _finalize_features(stats: pd.DataFrame) -> pd.DataFrame:
     out["avg_trip_distance"] = out["trip_distance_sum"] / denom
     out["avg_duration_min"] = out["duration_min_sum"] / denom
     out["avg_speed_mph"] = out["speed_mph_sum"] / denom
-    out["avg_total_amount"] = out["total_amount_sum"] / denom
+    out["avg_tip_amount"] = out["tip_amount_sum"] / denom
 
     out = out[
         [
@@ -326,11 +337,11 @@ def _finalize_features(stats: pd.DataFrame) -> pd.DataFrame:
             "avg_trip_distance",
             "avg_duration_min",
             "avg_speed_mph",
-            "avg_total_amount",
+            "avg_tip_amount",
         ]
     ]
     out_df = cast(pd.DataFrame, out)
-    return cast(pd.DataFrame, out_df.loc[out_df["avg_total_amount"].notna()])
+    return cast(pd.DataFrame, out_df.loc[out_df["avg_tip_amount"].notna()])
 
 
 def load_and_aggregate(raw_dir: str) -> pd.DataFrame:
@@ -419,7 +430,7 @@ def _train_continued_xgb(
     if len(train_core) < 1:
         raise ValueError("Continued training requires non-empty train_core data.")
 
-    val_x = val[FARE_FEATURES]
+    val_x = val[TIP_FEATURES]
     val_y = cast(pd.Series, val[TARGET])
 
     history: list[dict[str, float]] = []
@@ -437,7 +448,7 @@ def _train_continued_xgb(
     for batch_idx, start in enumerate(range(0, len(train_core), TRAIN_BATCH_ROWS), 1):
         end = min(start + TRAIN_BATCH_ROWS, len(train_core))
         batch = train_core.iloc[start:end]
-        x_batch = batch[FARE_FEATURES]
+        x_batch = batch[TIP_FEATURES]
         y_batch = cast(pd.Series, batch[TARGET])
 
         if model is None:
@@ -500,7 +511,7 @@ def train_and_save(df: pd.DataFrame) -> dict:
     if len(train) < 10 or len(test) < 5:
         raise ValueError(f"Not enough data: {len(train)} train rows, {len(test)} test rows.")
 
-    # Baseline: mean fare per (zone, hour)
+    # Baseline: mean tip per (zone, hour)
     baseline = train.groupby(["pu_location_id", "hour"])[TARGET].mean().reset_index()
     baseline.columns = pd.Index(["pu_location_id", "hour", "baseline_pred"])
     scored = test.merge(baseline, on=["pu_location_id", "hour"], how="left")
@@ -526,27 +537,27 @@ def train_and_save(df: pd.DataFrame) -> dict:
     )
     model, val_history, best_batch, best_val_mae = _train_continued_xgb(train_core, val)
 
-    train_preds = pd.Series(model.predict(train[FARE_FEATURES]), index=train.index)
+    train_preds = pd.Series(model.predict(train[TIP_FEATURES]), index=train.index)
     train_mae = float(mean_absolute_error(train[TARGET], train_preds))
     train_mape = mape(cast(pd.Series, train[TARGET]), cast(pd.Series, train_preds))
 
-    val_preds = pd.Series(model.predict(val[FARE_FEATURES]), index=val.index)
+    val_preds = pd.Series(model.predict(val[TIP_FEATURES]), index=val.index)
     val_mae = float(mean_absolute_error(val[TARGET], val_preds))
     val_mape = mape(cast(pd.Series, val[TARGET]), cast(pd.Series, val_preds))
 
-    preds = pd.Series(model.predict(test[FARE_FEATURES]), index=test.index)
+    preds = pd.Series(model.predict(test[TIP_FEATURES]), index=test.index)
     model_mae = float(mean_absolute_error(test[TARGET], preds))
     model_mape = mape(cast(pd.Series, test[TARGET]), cast(pd.Series, preds))
 
     MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
-            "fare_model": model,
-            "fare_features": FARE_FEATURES,
+            "tip_model": model,
+            "tip_features": TIP_FEATURES,
             "trained_at": datetime.now(UTC).isoformat(),
             "training_rows": len(train),
         },
-        MODEL_OUTPUT_DIR / "traffic_model.joblib",
+        MODEL_OUTPUT_DIR / "tip_model.joblib",
     )
 
     metrics = {
@@ -589,7 +600,7 @@ def train_and_save(df: pd.DataFrame) -> dict:
 
 
 def main() -> None:
-    print("StreamCab — Fare Predictor Training")
+    print("StreamCab — Tip Predictor Training")
     print(f"  Raw data : {RAW_DATA_DIR}")
     print(f"  Model out: {MODEL_OUTPUT_DIR}\n")
 
@@ -602,7 +613,7 @@ def main() -> None:
         metrics = train_and_save(df)
         print("\nTraining complete:")
         print(json.dumps(metrics, indent=2))
-        print(f"\nModel saved → {MODEL_OUTPUT_DIR / 'traffic_model.joblib'}")
+        print(f"\nModel saved → {MODEL_OUTPUT_DIR / 'tip_model.joblib'}")
     except Exception as ex:
         print(f"Training failed: {ex}")
         sys.exit(1)

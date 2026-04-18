@@ -8,7 +8,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
-RUN uv pip install --system --no-cache ".[predictor,dashboard]" "pyspark==3.5.1" "kafka-python==2.0.2"
+COPY src/streamcab /opt/streamcab/src/streamcab
+RUN uv pip install --system --no-cache ".[predictor,dashboard]"
 
 COPY apps /opt/streamcab/apps
 COPY data/reference /opt/streamcab/data/reference

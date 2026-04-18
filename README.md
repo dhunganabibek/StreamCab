@@ -1,115 +1,122 @@
 # StreamCab
 
-StreamCab turns historical taxi parquet data into a live pipeline with Kafka, Spark, model inference, and a Streamlit dashboard.
+StreamCab turns historical NYC taxi parquet data into a live streaming pipeline with Kafka, Spark Structured Streaming, ML inference, and a Streamlit dashboard.
 
 ## Architecture
 
-This project runs as 6 services:
+![Architectural Diagram](./assets/architecture.png)
 
-1. `kafka` (Kafka broker + producer)
-2. `postgres` (state store)
-3. `app` (spark + predictor + dashboard)
-4. `consumer` (raw Kafka consumer -> Postgres `live_trips`)
-5. `train-once` (manual one-shot training job)
-6. `control-center` (Kafka UI)
+### Services
 
-The `app` container runs three processes:
+| Service          | Container                  | What it does                                      |
+| ---------------- | -------------------------- | ------------------------------------------------- |
+| `postgres`       | `streamcab-postgres`       | State store (live trips, aggregates, predictions) |
+| `kafka`          | `streamcab-kafka`          | KRaft broker + producer replaying parquet data    |
+| `app`            | `streamcab-app`            | Spark streaming + predictor + Streamlit dashboard |
+| `consumer`       | `streamcab-consumer`       | Kafka → Postgres `live_trips` writer              |
+| `control-center` | `streamcab-control-center` | Confluent Kafka UI                                |
+| `train-once`     | _(manual)_                 | One-shot model training job                       |
 
-1. Spark streaming pipeline (Kafka -> Postgres `traffic_agg`)
-2. Realtime predictor (`traffic_agg` -> `predictions`)
-3. Streamlit dashboard
+The `app` container runs three processes concurrently:
 
-The `consumer` container runs:
+1. **Spark** — reads from Kafka, aggregates into `traffic_agg`
+2. **Predictor** — reads `traffic_agg`, writes predictions to `predictions`
+3. **Dashboard** — Streamlit on port `8501`
 
-1. Raw Kafka consumer (Kafka -> Postgres `live_trips`)
+## Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose v2)
+- [uv](https://docs.astral.sh/uv/) — only needed for local dev / pre-commit hooks
 
 ## Quick Start
 
-### Install all the dependencies and set precommit hooks
+### 1. Clone and install dev tools
 
 ```bash
+git clone git@github.com:dhunganabibek/StreamCab.git && cd StreamCab
 uv sync --all-extras
 uv run pre-commit install
 ```
 
-### Configure environment
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Local mode defaults are already set.
+All defaults work for local development. Edit `.env` only if you need to override something (e.g. a different Postgres host port).
 
-- Download and runtime both use the same local host folder: `RAW_DATA_HOST_PATH` (default: `./data/raw-data`).
-- `train-once` uses local data by default.
-- For S3 training, run `train-once` with a one-time override:
-  `docker compose run --rm -e RAW_DATA_DIR=s3://your-bucket/streamcab/parquet train-once`
+### 3. Download data
 
-### Download a small data slice
-
-This API has rate limiting, so use small date ranges.
+This API has rate limiting — keep date ranges small.
 
 ```bash
-python scripts/download_tlc_data.py --output data/raw-data/parquet --start 2022-01 --end 2022-03
+uv run python scripts/download_tlc_data.py \
+  --output data/raw-data/parquet \
+  --start 2022-01 --end 2022-03
 ```
 
-### Train model once
+### 4. Train the model
 
 ```bash
 docker compose run --rm train-once
 ```
 
-Expected outputs:
+Expected outputs: `models/tip_model.joblib`, `models/metrics.json`
 
-- `models/traffic_model.joblib`
-- `models/metrics.json`
-
-### Start runtime stack
+### 5. Start the stack
 
 ```bash
 docker compose up --build -d
 ```
 
-Open dashboard:
+| URL                     | Service                             |
+| ----------------------- | ----------------------------------- |
+| <http://localhost:8501> | Streamlit dashboard                 |
+| <http://localhost:9021> | Confluent Control Center (Kafka UI) |
 
-- http://localhost:8501
-
-Check the kafka UI:
-
-- http://localhost:9021/
-
-You should see a consumer group named `streamcab-live-consumer` after startup.
+After startup you should see a consumer group `streamcab-live-consumer` in the Kafka UI.
 
 ## Useful Commands
 
 ```bash
-# Start core services
-
-docker compose up --build -d
-
-# Tail app logs
-
+# Tail app logs (Spark + predictor + dashboard)
 docker compose logs -f app
 
-# kafka + producer logs
-
+# Tail producer/Kafka logs
 docker compose logs -f kafka
 
-# Stop everything
-
+# Stop and remove containers
 docker compose down
+
+# Stop and also remove volumes (wipes Postgres + Kafka data)
+docker compose down -v
 ```
+
+## Database Quick Info
+
+- Connect from host tools (DBeaver, psql): `postgresql://streamcab:streamcab@localhost:5433/streamcab`
+- Connect from containers: `postgresql://streamcab:streamcab@postgres:5432/streamcab`
+- `live_trips`: recent raw trip events written by the consumer.
+- `traffic_agg`: Spark 10-minute aggregates per pickup zone.
+- `predictions`: latest model outputs (fare/tip range/surge) used by the dashboard.
+
+## Environment Variables
+
+All variables have working defaults. See [.env.example](.env.example) for the full list with explanations.
+
+Key overrides:
+
+| Variable                         | Default           | Notes                                |
+| -------------------------------- | ----------------- | ------------------------------------ |
+| `POSTGRES_HOST_PORT`             | `5433`            | Change if port 5433 is taken locally |
+| `RAW_DATA_HOST_PATH`             | `./data/raw-data` | Host path mounted into containers    |
+| `REPLAY_SLEEP_SECONDS`           | `0.15`            | Seconds between producer events      |
+| `WRITE_LIVE_TRIPS_FROM_PRODUCER` | `false`           | `true` bypasses the consumer service |
 
 ## Notes
 
-- Postgres host port defaults to `5433` to avoid local conflicts.
-- One topic setting is enough: `KAFKA_TOPIC` is used by both producer and stream processor.
-- The app and producer read data from `/opt/streamcab/data/raw-data/parquet` in containers.
-- `RAW_DATA_HOST_PATH` controls what host folder is mounted to that container path.
-- `RAW_DATA_DIR` is an optional `train-once` override (for example `s3://...`).
-- `train-once` runs only when invoked manually:
-  `docker compose run --rm train-once`
-
-## Diagram
-
-![Architectural Diagram](./assets/architecture.png)
+- Postgres is exposed on **5433** (not 5432) to avoid conflicts with a local Postgres.
+- The Kafka broker runs in KRaft mode (no ZooKeeper).
+- `train-once` uses the `manual` Compose profile — it only runs when invoked explicitly.
+- For S3 training data: `docker compose run --rm -e RAW_DATA_DIR=s3://your-bucket/path train-once`

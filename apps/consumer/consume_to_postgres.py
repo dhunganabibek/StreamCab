@@ -6,6 +6,7 @@ from typing import Any
 
 import psycopg
 from kafka import KafkaConsumer
+from kafka.errors import CommitFailedError
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "taxi-trips")
@@ -14,6 +15,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://streamcab:streamcab@postg
 INSERT_BATCH_SIZE = int(os.getenv("LIVE_TRIPS_INSERT_BATCH_SIZE", "200"))
 INSERT_FLUSH_INTERVAL_SECONDS = float(os.getenv("LIVE_TRIPS_FLUSH_INTERVAL_SECONDS", "1.0"))
 LIVE_TRIPS_RETENTION_MINUTES = int(os.getenv("LIVE_TRIPS_RETENTION_MINUTES", "10"))
+KAFKA_MAX_POLL_INTERVAL_MS = int(os.getenv("KAFKA_MAX_POLL_INTERVAL_MS", "300000"))
+KAFKA_MAX_POLL_RECORDS = int(os.getenv("KAFKA_MAX_POLL_RECORDS", "100"))
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -48,8 +51,18 @@ def build_consumer() -> KafkaConsumer:
         enable_auto_commit=False,
         auto_offset_reset="earliest",
         consumer_timeout_ms=1000,
+        max_poll_interval_ms=KAFKA_MAX_POLL_INTERVAL_MS,
+        max_poll_records=KAFKA_MAX_POLL_RECORDS,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
     )
+
+
+def safe_commit(consumer: KafkaConsumer) -> None:
+    try:
+        consumer.commit()
+    except CommitFailedError as exc:
+        # Rebalance can happen when inserts take longer than poll interval.
+        print(f"Kafka commit skipped after rebalance: {exc}")
 
 
 def insert_rows(rows: list[tuple[Any, ...]]) -> None:
@@ -111,7 +124,7 @@ def main() -> None:
 
                 if len(buffer) >= INSERT_BATCH_SIZE:
                     insert_rows(buffer)
-                    consumer.commit()
+                    safe_commit(consumer)
                     print(f"Inserted {len(buffer)} live trip rows.")
                     buffer.clear()
                     last_flush = time.monotonic()
@@ -120,7 +133,7 @@ def main() -> None:
             now = time.monotonic()
             if buffer and ((now - last_flush) >= INSERT_FLUSH_INTERVAL_SECONDS or not had_messages):
                 insert_rows(buffer)
-                consumer.commit()
+                safe_commit(consumer)
                 print(f"Inserted {len(buffer)} live trip rows.")
                 buffer.clear()
                 last_flush = now
@@ -129,7 +142,7 @@ def main() -> None:
     finally:
         if buffer:
             insert_rows(buffer)
-            consumer.commit()
+            safe_commit(consumer)
             print(f"Inserted final {len(buffer)} live trip rows.")
         consumer.close()
 

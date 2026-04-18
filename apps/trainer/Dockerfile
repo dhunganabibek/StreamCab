@@ -7,6 +7,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+COPY src/streamcab /opt/streamcab/src/streamcab
 RUN uv pip install --system --no-cache ".[trainer]"
 
 COPY apps/trainer /opt/streamcab/apps/trainer
