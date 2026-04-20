@@ -102,6 +102,7 @@ to live dashboard — that runs reproducibly on a single machine.
 \textbf{Collection workflow}
 \begin{enumerate}
   \item Data Size:  \textbf{152GB} CSV and \textbf{24GB} parquet
+  \item Tentative Rows: \textbf{1642819405} \-  Around 16 billions
   \item Download monthly parquet files via project script (retry + back-off).
   \item Store under \texttt{/data/raw-data/parquet/}.
   \item Producer replays rows to Kafka as pseudo-live events.
@@ -275,17 +276,16 @@ cannot represent.
 \begin{itemize}
   \item Reproducible one-command startup with Docker Compose.
   \item Spark windowed aggregates as stable, interpretable features.
-  \item Strong prediction accuracy with XGBoost.
-  \item Memory-aware batch training on limited hardware.
+  \item Strong prediction accuracy with XGBoost even with 10\% training data.
 \end{itemize}
 
 \column{0.5\textwidth}
 \textbf{Most difficult}
 \begin{itemize}
-  \item Training at scale under local memory constraints.
-  \item Cross-service reliability between Kafka, Spark, and PostgreSQL.
-  \item Pre-2017 TLC format changes (lat/lon vs.\ zone IDs).
-  \item Spark checkpoint tuning for stable restarts.
+  \item \textbf{XGboost} performance drop when we train in all data. May be over-fitting. (Pytorch might be easy)
+  \item Network communication across docker container and volume mounts.
+  \item Schema changes and inconsistent data. LC format changes (lat/lon vs.\ zone IDs).
+  \item Difficult to restart training on failures. Spark checkpoints helps but difficult.
 \end{itemize}
 \end{columns}
 
@@ -294,13 +294,11 @@ cannot represent.
 signals (weather/events), quantile outputs, cloud-scale deployment.
 \end{frame}
 
-\begin{frame}{Submission Checklist}
+\begin{frame}{Additional References}
 \begin{itemize}
-  \item[$\checkmark$] \textbf{Code Links:} \url{https://github.com/dhunganabibek/StreamCab}
-  \item[$\checkmark$] \textbf{Data source:} \url{www.nyc.gov/site/tlc/about/tlc-trip-record-data.page}
-  \item[$\checkmark$] Final report in IEEE research paper style
-  \item[$\checkmark$] Abstract, Introduction, Related Work, Architecture, Data, Results, Conclusion
-  \item[$\checkmark$] Presentation covers all five required sections
+  \item \textbf{Youtube links:} \url{https://youtu.be/lEEw0fPl7UM}
+  \item \textbf{Code Links:} \url{https://github.com/dhunganabibek/StreamCab}
+  \item \textbf{Data source:} \url{www.nyc.gov/site/tlc/about/tlc-trip-record-data.page}
 \end{itemize}
 \end{frame}
 
