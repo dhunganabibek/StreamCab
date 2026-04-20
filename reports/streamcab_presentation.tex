@@ -191,7 +191,7 @@ Conservative filtering reduces outlier influence and improves model stability.
 \textbf{Intermediates}
 \begin{itemize}
   \item Kafka topic \texttt{taxi-trips}
-  \item \texttt{live\_trips} table
+  \item \texttt{live\_trips} table in DB
   \item \texttt{traffic\_agg} table
   \item Spark checkpoints
 \end{itemize}
@@ -210,15 +210,15 @@ Conservative filtering reduces outlier influence and improves model stability.
 \begin{frame}{Model Training Configuration}
 \begin{columns}[T]
 \column{0.5\textwidth}
-\textbf{Target:} \texttt{avg\_total\_amount}
+\textbf{Target:} \texttt{tip\_amount}
 
 \vspace{0.4em}
-\textbf{Features (8):}
+\textbf{Features:}
 \begin{itemize}\small
-  \item \texttt{pu\_location\_id}, \texttt{hour}
-  \item \texttt{day\_of\_week}, \texttt{is\_weekend}
-  \item \texttt{avg\_trip\_distance}, \texttt{avg\_duration\_min}
-  \item \texttt{avg\_speed\_mph}, \texttt{trip\_count}
+  \item \texttt{location\_id}, \texttt{hour}
+  \item \texttt{day\_of\_week}
+  \item \texttt{trip\_distance}, \texttt{duration\_min}
+  \item \texttt{speed\_mph}, \texttt{trip\_count}
 \end{itemize}
 
 \column{0.5\textwidth}
@@ -231,7 +231,6 @@ Conservative filtering reduces outlier influence and improves model stability.
 
 \normalsize\vspace{0.4em}
 \textbf{Strategy:} 500K-row parquet batches; continued boosting (+40 trees/batch);
-best validation-MAE checkpoint selected.
 \end{columns}
 \end{frame}
 
