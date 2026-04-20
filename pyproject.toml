@@ -32,13 +32,18 @@ trainer = [
     "scikit-learn==1.5.1",
     "joblib==1.4.2",
     "xgboost==2.1.1",
-    "pyspark>=3.5.1",
+    "pyspark==3.5.1",
+]
+consumer = [
+    "kafka-python-ng>=2.2.3",
+    "psycopg[binary]>=3.1",
 ]
 predictor = [
     "pandas==2.2.2",
     "joblib==1.4.2",
     "xgboost==2.1.1",
     "psycopg[binary]>=3.1",
+    "pyspark==3.5.1",
 ]
 scripts = [
     "httpx>=0.27",
@@ -46,7 +51,7 @@ scripts = [
 dev = [
     "ruff>=0.9.0",
     "pyright>=1.1.390",
-    "pyspark>=4.1.1",
+    "pyspark==3.5.1",
 ]
 
 [tool.uv_build.wheel]

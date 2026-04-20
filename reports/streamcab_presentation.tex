@@ -69,7 +69,7 @@ to live dashboard — that runs reproducibly on a single machine.
 
 \vspace{0.2em}
 \small Parquet $\to$ Kafka $\to$ Spark $\to$ PostgreSQL $\to$ Predictor $\to$ Dashboard
-\end{frame}
+\end{frame} 
 
 \begin{frame}{Architecture Components}
 \begin{columns}[T]
@@ -88,9 +88,6 @@ to live dashboard — that runs reproducibly on a single machine.
   \item \textbf{Dashboard:} live KPIs, map, zone rankings
 \end{itemize}
 \vspace{0.5em}
-\textbf{Tools not in class:} Kafka (pub/sub event log),
-Spark Structured Streaming (stateful DataFrames),
-psycopg (Python--PostgreSQL bridge)
 \end{columns}
 \end{frame}
 
@@ -104,13 +101,14 @@ psycopg (Python--PostgreSQL bridge)
 \vspace{0.5em}
 \textbf{Collection workflow}
 \begin{enumerate}
+  \item Data Size:  \textbf{152GB} CSV and \textbf{24GB} parquet
   \item Download monthly parquet files via project script (retry + back-off).
   \item Store under \texttt{/data/raw-data/parquet/}.
   \item Producer replays rows to Kafka as pseudo-live events.
 \end{enumerate}
 
 \vspace{0.5em}
-\textbf{Scale:} 2015--2025 supported; default pull 2022-01 → 2024-12;
+\textbf{Scale:} 2010--2025 supported; default pull 2022-01 → 2024-12;
 quick-start uses 2022-01 → 2022-03 for fast local iteration.\\[0.4em]
 \textbf{Reference data:} TLC zone centroid CSV for spatial zone mapping.
 \end{frame}

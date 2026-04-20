@@ -156,6 +156,8 @@ services:
     build:
       context: .
       dockerfile: apps/app/Dockerfile
+      args:
+        EXTRAS: "consumer"
     container_name: streamcab-consumer
     depends_on:
       postgres:
