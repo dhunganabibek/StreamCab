@@ -3,6 +3,7 @@ data/raw
 .env
 data/checkpoints/*
 data/processed/*
+test
 
 .spark-checkpoints
 

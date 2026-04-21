@@ -1,4 +1,5 @@
 \documentclass[conference]{IEEEtran}
+% cSpell:words Psycopg dropoff MAPE joblib checkpointing checkpointed bursty backtesting productionization geospatial Guestrin
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -8,6 +9,7 @@
 \usepackage{amsmath}
 \usepackage{cite}
 \usepackage{enumitem}
+\usepackage{microtype}
 
 \title{StreamCab: Real-Time Taxi Fare Intelligence with Kafka, Spark, and XGBoost}
 \author{%
@@ -35,10 +37,9 @@ The objectives of StreamCab are:
 \end{itemize}
 
 \section{Related Work and Background}
-Streaming architectures commonly use Kafka for event transport, Spark Structured Streaming for stateful transformations, and SQL databases for serving curated outputs \cite{kafka,spark}. Gradient-boosted trees, especially XGBoost, are widely used for tabular prediction due to strong accuracy-speed trade-offs \cite{xgboost}.
+Streaming architectures commonly use Kafka for event transport, Spark Structured Streaming for stateful transformations, and SQL databases for serving curated outputs~\cite{kafka,spark}. Gradient-boosted trees, especially XGBoost, are widely used for tabular prediction due to strong accuracy-speed trade-offs~\cite{xgboost}.
 
-Compared to distributed cloud deployments, this project emphasizes local reproducibility and careful memory-aware design. The training pipeline uses batched parquet processing and continued model updates to support large datasets on limited RAM.
-
+Compared to distributed cloud deployments, this project emphasizes local reproducibility and careful memory-aware design. The training pipeline uses batched parquet processing and continued model updates to support large datasets on limited RAM\@.
 \section{System Architecture and Design}
 \subsection{Architecture Overview}
 The system has six services: PostgreSQL, Kafka (+ producer), Spark/predictor/dashboard app container, consumer, one-shot trainer, and Kafka Control Center.
@@ -46,8 +47,7 @@ The system has six services: PostgreSQL, Kafka (+ producer), Spark/predictor/das
 \begin{figure}[!t]
     \centering
     \includegraphics[width=0.95\linewidth]{../assets/architecture.png}
-    \caption{StreamCab end-to-end architecture.}
-    \label{fig:architecture}
+    \caption{StreamCab end-to-end architecture.}\label{fig:architecture}
 \end{figure}
 
 \subsection{Component Responsibilities}
@@ -60,22 +60,14 @@ The system has six services: PostgreSQL, Kafka (+ producer), Spark/predictor/das
     \item \textbf{Predictor + Dashboard:} Performs periodic inference and displays live analytics.
 \end{itemize}
 
-\subsection{Tools Not Covered in Class (Brief Intro)}
-If needed for course context:
-\begin{itemize}[leftmargin=1.5em]
-    \item \textbf{Apache Kafka:} Distributed event log for pub/sub data streaming.
-    \item \textbf{Spark Structured Streaming:} Incremental DataFrame processing with watermarks and windows.
-    \item \textbf{JDBC/Psycopg integration:} Database connectivity between Spark/Python services and PostgreSQL.
-\end{itemize}
-
 \section{Data Collection and Processing}
 \subsection{Data Source}
 Primary data comes from publicly available NYC TLC yellow taxi trip records (monthly parquet files).
 
-\textbf{Data source link:} \url{https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page} \cite{tlc}
+\textbf{Data source link:} \href{https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page}{NYC TLC Trip Record Data}~\cite{tlc}
 
 \subsection{Dataset Profile Used in This Project}
-The data download utility supports monthly yellow taxi parquet files from 2015 to 2025, with a default pull range of \texttt{2022-01} through \texttt{2024-12}. For the quick-start workflow documented in the repository, a smaller slice (for example \texttt{2022-01} to \texttt{2022-03}) is used for rapid iteration and reproducible local runs.
+The data download utility supports monthly yellow taxi parquet files from 2010 to 2025, with a default pull range of \texttt{2022{-}01} through \texttt{2024{-}12}. For the quick-start workflow documented in the repository, a smaller slice (for example \texttt{2022{-}01} to \texttt{2022{-}03}) is used for rapid iteration and reproducible local runs.
 
 At ingestion time, the pipeline reads only required columns (timestamps, distance, fare/amount, and zone/location fields) and applies consistency filters before aggregation. Rows are retained when duration, distance, speed, and amount fall within physically reasonable ranges, reducing outlier influence and malformed-record noise. For files that do not include pickup zone IDs, pickup latitude/longitude is snapped to nearest TLC zone centroids using a BallTree lookup.
 
@@ -123,8 +115,7 @@ Field & Stage & Description \\
 \texttt{predicted\_avg\_fare} & serving & Model inference output stored for dashboard consumption \\
 \bottomrule
 \end{tabular}
-\caption{Data dictionary across ingestion, aggregation, and prediction stages.}
-\label{tab:data_dictionary}
+\caption{Data dictionary across ingestion, aggregation, and prediction stages.}\label{tab:data_dictionary}
 \end{table*}
 
 \subsection{Processing Method (Inputs and Outputs)}
@@ -152,8 +143,7 @@ Pickup/dropoff times & Parseable timestamps \\
 Pickup zone & Zone ID or mappable lat/lon \\
 \bottomrule
 \end{tabular}
-\caption{Primary quality rules used before window aggregation.}
-\label{tab:quality_rules}
+\caption{Primary quality rules used before window aggregation.}\label{tab:quality_rules}
 \end{table}
 
 These constraints reflect common transportation-data cleaning practices: removing implausibly short/long trips, extreme speed artifacts from timestamp errors, and negative or unrealistically large monetary values. In local experiments, this step materially reduced aggregate volatility and improved model training stability.
@@ -169,12 +159,23 @@ The baseline predicts mean fare by pickup zone and hour. The XGBoost model uses 
 
 \subsection{Model Configuration Details}
 The target variable is \texttt{avg\_total\_amount}. Feature inputs are:
+{\raggedright%
 \begin{itemize}[leftmargin=1.5em]
-    \item \texttt{pu\_location\_id}, \texttt{hour}, \texttt{day\_of\_week}, \texttt{is\_weekend}
-    \item \texttt{avg\_trip\_distance}, \texttt{avg\_duration\_min}, \texttt{avg\_speed\_mph}, \texttt{trip\_count}
+    \item \textbf{Temporal/context:} \texttt{pu\_location\_id}, \texttt{hour}, \texttt{day\_of\_week}, \texttt{is\_weekend}
+    \item \textbf{Traffic aggregates:} \texttt{avg\_trip\_distance}, \texttt{avg\_duration\_min}, \texttt{avg\_speed\_mph}, \texttt{trip\_count}
 \end{itemize}
+\par}
 
-The XGBoost regressor is trained with \texttt{max\_depth=5}, \texttt{learning\_rate=0.05}, \texttt{subsample=0.9}, \texttt{colsample\_bytree=0.9}, \texttt{tree\_method=hist}, and \texttt{random\_state=42}. Training uses a temporal 80/20 train-test split, and the training partition is further divided into core-train plus validation for continued batch-wise boosting.
+The XGBoost regressor uses the following hyperparameters:
+\begin{itemize}[leftmargin=1.5em]
+    \item \texttt{max\_depth=5}
+    \item \texttt{learning\_rate=0.05}
+    \item \texttt{subsample=0.9}
+    \item \texttt{colsample\_bytree=0.9}
+    \item \texttt{tree\_method=hist}
+    \item \texttt{random\_state=42}
+\end{itemize}
+Training uses a temporal 80/20 train-test split, and the training partition is further divided into core-train plus validation for continued batch-wise boosting.
 
 \subsection{Memory-Aware Training}
 To support large datasets on limited memory, the trainer:
@@ -209,7 +210,7 @@ All components were executed in a local, containerized environment orchestrated 
 The training and streaming pipelines were tested on commodity hardware with limited memory, which informed several implementation decisions: bounded parquet batch sizes, strict column projection during reads, and additive aggregate statistics rather than full in-memory joins. While this environment does not replicate cloud-scale throughput, it provides realistic pressure for designing robust local-first data systems.
 
 \subsection{Configuration Snapshot}
-Table \ref{tab:config_snapshot} summarizes key runtime and training parameters used in the reference implementation.
+Table~\ref{tab:config_snapshot} summarizes key runtime and training parameters used in the reference implementation.
 
 \begin{table}[!t]
 \centering
@@ -227,8 +228,7 @@ Temporal split & 80\% earlier windows train, 20\% recent windows test \\
 Serving sink & PostgreSQL tables for aggregates and predictions \\
 \bottomrule
 \end{tabular}
-\caption{Configuration snapshot for reproducible local runs.}
-\label{tab:config_snapshot}
+\caption{Configuration snapshot for reproducible local runs.}\label{tab:config_snapshot}
 \end{table}
 
 \subsection{Data Splitting and Validation}
@@ -239,10 +239,10 @@ We compare two models:
     \item \textbf{Baseline:} pickup-zone and hour mean fare.
     \item \textbf{XGBoost:} gradient-boosted trees over engineered streaming aggregates.
 \end{itemize}
-Evaluation metrics include MAE for absolute error and MAPE for relative error, which together capture practical prediction quality for operational dashboards.
+Evaluation metrics include MAE for absolute error and MAPE for relative error, which together capture practical prediction quality for operational dashboards\@.
 
 \subsection{Runtime and Serving Considerations}
-Inference is run as a periodic scoring task over the most recent aggregate windows written to PostgreSQL. To keep end-to-end latency stable, predictor queries are intentionally narrow (recent time slice, selected feature columns), and writes are idempotent by timestamp-window keys. This pattern reduces unnecessary read amplification and avoids duplicate prediction rows during restarts.
+Inference is run as a periodic scoring task over the most recent aggregate windows written to PostgreSQL\@. To keep end-to-end latency stable, predictor queries are intentionally narrow (recent time slice, selected feature columns), and writes are idempotent by timestamp-window keys. This pattern reduces unnecessary read amplification and avoids duplicate prediction rows during restarts.
 
 From an operations perspective, three checks proved useful in continuous runs: (1) stream lag monitoring at Kafka consumer groups, (2) aggregate table freshness checks in SQL, and (3) prediction row count sanity checks per scoring interval. These low-cost signals helped detect stalled consumers and schema mismatches early, improving reliability during demos and repeated report experiments.
 
@@ -250,13 +250,17 @@ From an operations perspective, three checks proved useful in continuous runs: (
 The practical runbook used for experiments is:
 \begin{enumerate}[leftmargin=1.5em]
     \item Download selected monthly parquet files and verify storage path.
-    \item Run one-shot training to generate \texttt{traffic\_model.joblib} and \texttt{metrics.json}.
+    \item Run one-shot training to generate model artifacts (\texttt{traffic\_model{.}joblib}, \texttt{metrics{.}json}).
     \item Start streaming services (producer, Kafka, Spark pipeline, consumer, predictor).
-    \item Validate aggregate and prediction table updates in PostgreSQL.
+    \item Validate aggregate and prediction table updates in PostgreSQL\@.
     \item Open dashboard for live KPI and map inspection.
 \end{enumerate}
 
 This workflow separates expensive offline training from online scoring. As a result, retraining can be scheduled independently from serving availability, reducing runtime coupling and improving demo robustness.
+
+\subsection{Code Availability}
+The project source code and run instructions are available at:
+\href{https://github.com/dhunganabibek/StreamCab}{https://github.com/dhunganabibek/StreamCab}
 
 \subsection{Suggested Service-Level Objectives}
 For stable operation, the project tracks lightweight service-level objectives (SLOs) aligned with classroom-scale infrastructure.
@@ -274,13 +278,12 @@ Dashboard staleness & Latest window rendered without manual refresh loops \\
 Failure recovery time & Service restart without duplicate spikes \\
 \bottomrule
 \end{tabular}
-\caption{Operational SLOs used for local reliability checks.}
-\label{tab:slo_targets}
+\caption{Operational SLOs used for local reliability checks.}\label{tab:slo_targets}
 \end{table}
 
 \section{Results and Analysis}
 \subsection{Quantitative Results}
-The current run demonstrates a large gap between baseline and boosted-tree performance. The baseline (zone-hour mean) captures coarse temporal and spatial structure, but misses nonlinear interactions between trip count, speed, distance, and duration. XGBoost captures these interactions and reduces both MAE and MAPE.
+The current run demonstrates a large gap between baseline and boosted-tree performance. The baseline (zone-hour mean) captures coarse temporal and spatial structure, but misses nonlinear interactions between trip count, speed, distance, and duration. XGBoost captures these interactions and reduces both MAE and MAPE\@.
 
 \begin{table}[!t]
 \centering
@@ -292,8 +295,7 @@ Baseline (zone-hour mean) & 1.9891 & 15.43 \\
 XGBoost (test) & 0.4851 & 3.42 \\
 \bottomrule
 \end{tabular}
-\caption{Example model performance summary.}
-\label{tab:metrics}
+\caption{Example model performance summary.}\label{tab:metrics}
 \end{table}
 
 \subsection{Dashboard and Analytics Outputs}
@@ -307,8 +309,7 @@ Include screenshots or figures for:
 \begin{figure}[!t]
     \centering
     \includegraphics[width=0.95\linewidth]{../assets/app.png}
-    \caption{StreamCab dashboard showing live trip table, zone-level insights, and map-based analytics.}
-    \label{fig:dashboard}
+    \caption{StreamCab dashboard showing live trip table, zone-level insights, and map-based analytics.}\label{fig:dashboard}
 \end{figure}
 
 \subsection{Discussion}
@@ -381,13 +382,6 @@ These constraints do not prevent practical use; they define guardrails for respo
     \item Compare distributed multi-node deployment variants.
 \end{itemize}
 
-\section*{Submission Checklist Mapping}
-\begin{itemize}[leftmargin=1.5em]
-    \item GitHub repo with README walkthrough: \textbf{Yes} (update final links).
-    \item Public data source link: \textbf{Include in README and this paper}.
-    \item Research-style report (6--8 pages): \textbf{This report compiles within target range}.
-    \item Group and author names: \textbf{Replace placeholders on title page}.
-\end{itemize}
 
 \begin{thebibliography}{9}
 \bibitem{tlc}
