@@ -102,7 +102,7 @@ to live dashboard — that runs reproducibly on a single machine.
 \textbf{Collection workflow}
 \begin{enumerate}
   \item Data Size:  \textbf{152GB} CSV and \textbf{24GB} parquet
-  \item Tentative Rows: \textbf{1642819405} \-  Around 16 billions
+  \item Tentative Rows: \textbf{1642819405} \-  Around 16 billion
   \item Download monthly parquet files via project script (retry + back-off).
   \item Store under \texttt{/data/raw-data/parquet/}.
   \item Producer replays rows to Kafka as pseudo-live events.
@@ -171,9 +171,9 @@ Conservative filtering reduces outlier influence and improves model stability.
   \item \textbf{Ingest} — read parquet, normalize timestamps and zone IDs.
   \item \textbf{Stream} — replay rows to Kafka at configurable rate.
   \item \textbf{Aggregate} — Spark applies quality filters; computes 10-min window stats per zone.
-  \item \textbf{Persist} — consumer writes \texttt{live\_trips}; Spark upserts \texttt{traffic\_agg}.
-  \item \textbf{Train} — XGBoost reads aggregates in memory-aware batches.
-  \item \textbf{Predict} — predictor scores latest windows every 30 s.
+  \item \textbf{Persist} — consumer writes window stats to a table.
+  \item \textbf{Train} — XGBoost reads aggregates in small batches.
+  \item \textbf{Predict} — predictor scores real-time windows.
   \item \textbf{Visualize} — Streamlit renders KPIs, zone rankings, and map.
 \end{enumerate}
 \end{frame}
@@ -191,7 +191,6 @@ Conservative filtering reduces outlier influence and improves model stability.
 \textbf{Intermediates}
 \begin{itemize}
   \item Kafka topic \texttt{taxi-trips}
-  \item \texttt{live\_trips} table in DB
   \item \texttt{traffic\_agg} table
   \item Spark checkpoints
 \end{itemize}
