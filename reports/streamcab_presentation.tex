@@ -102,7 +102,7 @@ to live dashboard — that runs reproducibly on a single machine.
 \textbf{Collection workflow}
 \begin{enumerate}
   \item Data Size:  \textbf{152GB} CSV and \textbf{24GB} parquet
-  \item Tentative Rows: \textbf{1642819405} \-  Around 16 billions
+  \item Tentative Rows: \textbf{1642819405} \-  Around 16 billion
   \item Download monthly parquet files via project script (retry + back-off).
   \item Store under \texttt{/data/raw-data/parquet/}.
   \item Producer replays rows to Kafka as pseudo-live events.
