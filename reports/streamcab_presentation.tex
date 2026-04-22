@@ -122,7 +122,7 @@ quick-start uses 2022-01 → 2022-03 for fast local iteration.\\[0.4em]
   \item \texttt{pickup\_datetime}, \texttt{dropoff\_datetime}
   \item \texttt{passenger\_count}, \texttt{trip\_distance}
   \item \texttt{pu\_location\_id}, \texttt{do\_location\_id}
-  \item \texttt{total\_amount}, \texttt{emitted\_at}
+  \item \texttt{total\_amount}
 \end{itemize}
 
 \column{0.5\textwidth}
@@ -132,12 +132,11 @@ quick-start uses 2022-01 → 2022-03 for fast local iteration.\\[0.4em]
   \item \texttt{pu\_location\_id}, \texttt{trip\_count}
   \item \texttt{avg\_trip\_distance}, \texttt{avg\_duration\_min}
   \item \texttt{avg\_speed\_mph}, \texttt{avg\_total\_amount}
-  \item \texttt{anomaly\_count}
 \end{itemize}
 \end{columns}
 
 \vspace{0.6em}
-Pre-2017 files (lat/lon format) are snapped to nearest zone centroid via
+Coordinates snapped to nearest zone centroid via
 BallTree ($\approx$100 m precision).
 \end{frame}
 
@@ -224,12 +223,11 @@ Conservative filtering reduces outlier influence and improves model stability.
 \textbf{XGBoost settings:}\small
 \begin{itemize}
   \item \texttt{max\_depth=5}, \texttt{lr=0.05}
-  \item \texttt{subsample=0.9}, \texttt{tree\_method=hist}
   \item 80/20 temporal train-test split
 \end{itemize}
 
 \normalsize\vspace{0.4em}
-\textbf{Strategy:} 500K-row parquet batches; continued boosting (+40 trees/batch);
+\textbf{Strategy:} 500K-row parquet mini batches;
 \end{columns}
 \end{frame}
 
